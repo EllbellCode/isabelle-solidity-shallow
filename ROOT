@@ -15,6 +15,7 @@ session "Isabelle-Solidity" = "HOL-Library" +
     Contract
     WP
     Mcalc
+    MTests
     Solidity_Main
     Unit_Tests
     Bank

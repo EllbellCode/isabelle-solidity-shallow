@@ -20,6 +20,9 @@ definition kdSint where
 definition kdAddress where
   "kdAddress = Value \<circ> Address"
 
+definition kdBytes where
+  "kdBytes \<equiv> Value \<circ> Bytes"
+
 fun lift_value_unary::"(('a::address) valtype \<Rightarrow> ('a::address) valtype option) \<Rightarrow> ('a::address) rvalue \<Rightarrow> ('a::address) rvalue option" where
   "lift_value_unary op (rvalue.Value v) = op v \<bind> Some \<circ> rvalue.Value"
 | "lift_value_unary op _ = None"
@@ -64,6 +67,24 @@ definition kdmult_safe where
 definition kdmod where
   "kdmod = lift_value_binary vtmod"
 
+definition kdbytes_index where
+  "kdbytes_index = lift_value_binary vtbytes_index"
+
+definition kdbytes_and where
+  "kdbytes_and = lift_value_binary vtbytes_and"
+
+definition kdbytes_or where
+  "kdbytes_or = lift_value_binary vtbytes_or"
+
+definition kdbytes_xor where
+  "kdbytes_xor = lift_value_binary vtbytes_xor"
+
+definition kdbytes_not where
+  "kdbytes_not = lift_value_unary vtbytes_not"
+
+definition kdbytes_cast where
+  "kdbytes_cast m = lift_value_unary (vtbytes_cast m)"
+
 type_synonym 'a expression_monad = "('a rvalue, ex, 'a state) state_monad"
 
 definition newStack::"'a::address expression_monad" where
@@ -95,17 +116,23 @@ section \<open>Constants\<close>
 definition bool_monad where
   "bool_monad = return \<circ> kdbool"
 
-definition true_monad::"('a::address) expression_monad" where
+definition true_monad::"('a::address) expression_monad" ("\<langle>T\<rangle>")  where
   "true_monad = bool_monad True"
 
-definition false_monad::"('a::address) expression_monad" where
+definition false_monad::"('a::address) expression_monad"("\<langle>F\<rangle>")  where
   "false_monad = bool_monad False"
 
 definition sint_monad ("(\<langle>sint\<rangle> _)" [70] 69) where
   "sint_monad = return \<circ> kdSint"
 
+definition bytes_monad where
+  "bytes_monad n xs  = (if n \<notin> {1..<33} \<or> n \<noteq> length xs then throw Err else return (kdBytes xs))"
+
 definition address_monad where
   "address_monad = return \<circ> kdAddress"
+
+definition bytes_monad2 where
+  "bytes_monad2 = return \<circ> kdBytes"
 
 locale Contract =
   fixes this :: "'a::address" (*address of executing contract*)
@@ -120,7 +147,7 @@ locale Method =
   fixes msg_sender :: "'a::address" (*address of calling contract*)
     and msg_value :: "256 word" (*money send*)
     and timestamp :: "256 word" (*time stamp of a block*)
-  assumes sender_neq_null: "msg_sender \<noteq> null"
+  assumes less_bound: "unat timestamp < 2^256"
 begin
 
 definition sender_monad  ("\<langle>sender\<rangle>") where
@@ -129,14 +156,19 @@ definition sender_monad  ("\<langle>sender\<rangle>") where
 definition value_monad ("\<langle>value\<rangle>") where
   "value_monad = sint_monad msg_value"
 
-definition block_timestamp_monad where
+definition block_timestamp_monad ("\<langle>stamp\<rangle>") where
   "block_timestamp_monad = sint_monad timestamp"
+
+definition null_monad  ("\<langle>nul\<rangle>") where
+  "null_monad = address_monad null"
 
 end
 
 locale Keccak256 =
   fixes keccak256::"('a::address) rvalue \<Rightarrow> ('a::address) rvalue"
+  and encodeABI::"('a::address) rvalue list \<Rightarrow> ('a::address) rvalue"
   assumes "\<And>x y. keccak256 x = keccak256 y \<Longrightarrow> x = y"
+(*      and "\<And>xs ys. encodeABI xs = encodeABI ys \<Longrightarrow> xs = ys"*)
 begin
 
 definition keccak256_monad::"('a::address) expression_monad \<Rightarrow> ('a::address) expression_monad" ("\<langle>keccak256\<rangle>") where
@@ -144,6 +176,13 @@ definition keccak256_monad::"('a::address) expression_monad \<Rightarrow> ('a::a
     do {
       v \<leftarrow> m;
       return (keccak256 v)
+    }"
+
+definition encodeABI_monad::"('a::address) expression_monad list \<Rightarrow> ('a::address) expression_monad" ("\<langle>encodeABI\<rangle>") where
+  "encodeABI_monad ms =
+    do {
+      xs \<leftarrow> mfold ms;
+      return (encodeABI xs)
     }"
 
 end
@@ -264,6 +303,24 @@ definition mult_monad_safe::"('a::address) expression_monad \<Rightarrow> ('a::a
 definition mod_monad::"('a::address) expression_monad \<Rightarrow> ('a::address) expression_monad \<Rightarrow> ('a::address) expression_monad" (infixl "\<langle>%\<rangle>" 65) where
   "mod_monad = lift_op_monad kdmod"
 
+definition bytes_index_monad where
+  "bytes_index_monad = lift_op_monad kdbytes_index"
+
+definition bytes_and_monad where
+  "bytes_and_monad = lift_op_monad kdbytes_and"
+
+definition bytes_or_monad where
+  "bytes_or_monad = lift_op_monad kdbytes_or"
+
+definition bytes_xor_monad where
+  "bytes_xor_monad = lift_op_monad kdbytes_xor"
+
+definition bytes_not_monad where
+  "bytes_not_monad = lift_unary_monad kdbytes_not"
+
+definition bytes_cast_monad where
+  "bytes_cast_monad m = lift_unary_monad (kdbytes_cast m)"
+
 section \<open>Store Lookups\<close>
 
 definition (in Contract) storeLookup::
@@ -277,21 +334,34 @@ where
       if storage_data.is_Value sd then return (rvalue.Value (storage_data.vt sd)) else return (rvalue.Storage (Some \<lparr>Location=i, Offset= is\<rparr>))
     }"
 
+(*No Tests*)
 definition (in Contract) storeArrayLength::"id \<Rightarrow> ('a::address) expression_monad list \<Rightarrow> ('a::address) expression_monad" where
   "storeArrayLength i es =
     do {
       is \<leftarrow> lfold es;
       sd \<leftarrow> option Err (\<lambda>s. slookup is (state.Storage s this i));
-      storage_disjoint sd
+      storage_check sd
         (K (throw Err))
         (\<lambda>sa. return (rvalue.Value (Uint (of_nat (length (storage_data.ar sd))))))
         (K (throw Err))
     }"
 
+definition (in Contract) storeArrayLengthSafe::"id \<Rightarrow> ('a::address) expression_monad list \<Rightarrow> ('a::address) expression_monad" where
+  "storeArrayLengthSafe i es =
+    do {
+      is \<leftarrow> lfold es;
+      sd \<leftarrow> option Err (\<lambda>s. slookup is (state.Storage s this i));
+      storage_check sd
+        (K (throw Err))
+        (\<lambda>sa. (if length (storage_data.ar sd) < 2^256 then return (Value (Uint (word_of_nat (length (storage_data.ar sd))))) else throw Err))
+        (K (throw Err))
+    }"
+
+
 section \<open>Stack Lookups\<close>
 
-definition stack_disjoint where
-  "stack_disjoint i kf mf cf cp sf sp =
+definition stack_check where
+  "stack_check i kf mf cf cp sf sp =
     do {
       k \<leftarrow> applyf Stack;
       case k $$ i of
@@ -313,23 +383,23 @@ where
   "stackLookup i es =
     do {
       is \<leftarrow> lfold es;
-      stack_disjoint i
+      stack_check i
         (\<lambda>k. return (Value k))
-        (\<lambda>p. do {
-          l \<leftarrow> option Err (\<lambda>s. mlookup (state.Memory s) is p);
-          md  \<leftarrow> option Err (\<lambda>s. state.Memory s $ l);
-          if mdata.is_Value md then return (rvalue.Value (mdata.vt md)) else return (rvalue.Memory l)
+        (\<lambda>l. do {
+          l' \<leftarrow> option Err (\<lambda>s. mlookup (state.Memory s) is l);
+          md  \<leftarrow> option Err (\<lambda>s. state.Memory s $ l');
+          if mdata.is_Value md then return (rvalue.Value (mdata.vt md)) else return (rvalue.Memory l')
         })
-        (\<lambda>p xs. do {
-          sd \<leftarrow> option Err (\<lambda>s. state.Calldata s $$ p \<bind> clookup (xs@is));
-          if call_data.is_Value sd then return (rvalue.Value (call_data.vt sd)) else return (rvalue.Calldata (Some \<lparr>Location=p, Offset=xs@is\<rparr>))
+        (\<lambda>l xs. do {
+          sd \<leftarrow> option Err (\<lambda>s. state.Calldata s $$ l \<bind> clookup (xs@is));
+          if call_data.is_Value sd then return (rvalue.Value (call_data.vt sd)) else return (rvalue.Calldata (Some \<lparr>Location=l, Offset=xs@is\<rparr>))
         })
         (
           return (rvalue.Calldata None)
         )
-        (\<lambda>p xs. do {
-          sd \<leftarrow> option Err (\<lambda>s. slookup (xs@is) (state.Storage s this p));
-          if storage_data.is_Value sd then return (rvalue.Value (storage_data.vt sd)) else return (rvalue.Storage (Some \<lparr>Location=p, Offset=xs@is\<rparr>))
+        (\<lambda>l xs. do {
+          sd \<leftarrow> option Err (\<lambda>s. slookup (xs@is) (state.Storage s this l));
+          if storage_data.is_Value sd then return (rvalue.Value (storage_data.vt sd)) else return (rvalue.Storage (Some \<lparr>Location=l, Offset=xs@is\<rparr>))
         })
         (
           return (rvalue.Storage None)
@@ -340,20 +410,20 @@ definition(in Contract) arrayLength::"id \<Rightarrow> ('a::address) expression_
   "arrayLength i es =
     do {
       is \<leftarrow> lfold es;
-      stack_disjoint i
+      stack_check i
         (K (throw Err))
-        (\<lambda>p. do {
-          l \<leftarrow> option Err (\<lambda>s. mlookup (state.Memory s) is p);
-          md  \<leftarrow> option Err (\<lambda>s. state.Memory s $ l);
+        (\<lambda>l. do {
+          l' \<leftarrow> option Err (\<lambda>s. mlookup (state.Memory s) is l);
+          md  \<leftarrow> option Err (\<lambda>s. state.Memory s $ l');
           if mdata.is_Array md then return (rvalue.Value (Uint (of_nat (length (mdata.ar md))))) else throw Err
         })
-        (\<lambda>p xs. do {
-          sd \<leftarrow> option Err (\<lambda>s. state.Calldata s $$ p \<bind> clookup (xs@is));
+        (\<lambda>l xs. do {
+          sd \<leftarrow> option Err (\<lambda>s. state.Calldata s $$ l \<bind> clookup (xs@is));
           if call_data.is_Array sd then return (rvalue.Value (Uint (of_nat (length (call_data.ar sd))))) else throw Err
         })
         (throw Err)
-        (\<lambda>p xs. do {
-          sd \<leftarrow> option Err (\<lambda>s. slookup (xs@is) (state.Storage s this p));
+        (\<lambda>l xs. do {
+          sd \<leftarrow> option Err (\<lambda>s. slookup (xs@is) (state.Storage s this l));
           if storage_data.is_Array sd then return (rvalue.Value (Uint (of_nat (length (storage_data.ar sd))))) else throw Err
         })
         (throw Err)
@@ -413,6 +483,9 @@ lemma execute_cond_monad_simp4[execute_simps]:
   unfolding cond_monad_def by (simp add: execute_simps assms)
 
 section \<open>Require/Assert\<close>
+(*
+  TODO: Assert has different exception than require.
+*)
 
 definition require_monad::"('a::address) expression_monad \<Rightarrow> ('a::address) expression_monad" where
   "require_monad em = 
@@ -444,61 +517,61 @@ definition storage_update_monad where
 
 end
 
-definition option_disjoint where
-  "option_disjoint f m = option Err f \<bind> m"
+definition option_check where
+  "option_check f m = option Err f \<bind> m"
 
 fun (in Contract) assign_stack::
   "id \<Rightarrow> ('a::address) valtype list \<Rightarrow> ('a::address) rvalue \<Rightarrow> ('a::address) expression_monad"
 where
   "assign_stack i is (rvalue.Value v) =
-    stack_disjoint i
-      (K ((modify (stack_update i (kdata.Value v))) \<bind> K (return Empty)))
-      (\<lambda>p. (memory_update_monad (\<lambda>m. mupdate is (p, (mdata.Value v), m))))
+    stack_check i
+      (K (modify (stack_update i (kdata.Value v)) \<bind> K (return Empty)))
+      (\<lambda>l. (memory_update_monad (\<lambda>m. mupdate is (l, (mdata.Value v), m))))
       (K (K (throw Err)))
       (throw Err)
-      (\<lambda>p xs. storage_update_monad xs is (K (storage_data.Value v)) p)
+      (\<lambda>l xs. storage_update_monad xs is (K (storage_data.Value v)) l)
       (throw Err)"
-| "assign_stack i is (rvalue.Memory p) =
-    stack_disjoint i
+| "assign_stack i is (rvalue.Memory l) =
+    stack_check i
       (K (throw Err))
-      (\<lambda>p'. case_list is
-        (modify (stack_update i (kdata.Memory p))\<bind> K (return Empty))
-        (K (K (memory_update_monad (\<lambda>m. (m$p) \<bind> (\<lambda>v. mupdate is (p', v, m)))))))
+      (\<lambda>l'. case_list is
+        (modify (stack_update i (kdata.Memory l))\<bind> K (return Empty))
+        (K (K (memory_update_monad (\<lambda>m. (m$l) \<bind> (\<lambda>v. mupdate is (l', v, m)))))))
       (K (K (throw Err)))
       (throw Err)
-      (\<lambda>p' xs. option_disjoint
-        (\<lambda>s. read_storage (state.Memory s) p)
-        (\<lambda>sd. storage_update_monad xs is (K sd) p'))
+      (\<lambda>l' xs. option_check
+        (\<lambda>s. copy_memory_storage (state.Memory s) l)
+        (\<lambda>sd. storage_update_monad xs is (K sd) l'))
       (throw Err)"
-| "assign_stack i is (rvalue.Calldata (Some \<lparr>Location=p, Offset=xs\<rparr>)) =
-    stack_disjoint i
+| "assign_stack i is (rvalue.Calldata (Some p)) =
+    stack_check i
       (K (throw Err))
-      (\<lambda>p'. option_disjoint
-        (\<lambda>s. state.Calldata s $$ p \<bind> clookup xs)
-        (\<lambda>cd. memory_update_monad (mupdate is \<circ> (read_calldata_memory cd p'))))
+      (\<lambda>l. option_check
+        (\<lambda>s. state.Calldata s $$ (Location p) \<bind> clookup (Offset p))
+        (\<lambda>cd. memory_update_monad (mupdate is \<circ> (copy_calldata_memory cd l))))
       (K (K (throw Err)))
-      (modify (stack_update i (kdata.Calldata (Some \<lparr>Location=p, Offset= xs\<rparr>))) \<bind> K (return Empty))
-      (\<lambda>p' xs'. option_disjoint
-        (\<lambda>s. state.Calldata s $$ p \<bind> clookup (xs @ is))
-        (\<lambda>cd. storage_update_monad xs' is (K (read_calldata_storage cd)) p'))
+      (modify (stack_update i (kdata.Calldata (Some p))) \<bind> K (return Empty))
+      (\<lambda>l xs. option_check
+        (\<lambda>s. state.Calldata s $$ (Location p) \<bind> clookup (Offset p @ is))
+        (\<lambda>cd. storage_update_monad xs is (K (copy_calldata_storage cd)) l))
       (throw Err)"
 | "assign_stack i is (rvalue.Calldata None) = throw Err"
-| "assign_stack i is (rvalue.Storage (Some \<lparr>Location=p, Offset=xs\<rparr>)) =
-    stack_disjoint i
+| "assign_stack i is (rvalue.Storage (Some p)) =
+    stack_check i
       (K (throw Err))
-      (\<lambda>p'. option_disjoint
-        (\<lambda>s. slookup xs (state.Storage s this p))
+      (\<lambda>l. option_check
+        (\<lambda>s. slookup (Offset p) (state.Storage s this (Location p)))
         (\<lambda>sd. memory_update_monad
-          (\<lambda>m. read_storage_memory sd p' m \<bind>
+          (\<lambda>m. copy_storage_memory sd l m \<bind>
             mupdate is)))
       (K (K (throw Err)))
       (throw Err)
-      (\<lambda>p' xs'. case_list is
-        (modify (stack_update i (kdata.Storage (Some \<lparr>Location=p, Offset= xs\<rparr>))) \<bind> K (return Empty))
-        (K (K (option_disjoint
-          (\<lambda>s. slookup (xs @ is) (state.Storage s this p))
-          (\<lambda>sd. storage_update_monad xs' [] (K sd) p')))))
-      (modify (stack_update i (kdata.Storage (Some \<lparr>Location=p, Offset= xs\<rparr>))) \<bind> K (return Empty))"
+      (\<lambda>l xs. case_list is
+        (modify (stack_update i (kdata.Storage (Some p))) \<bind> K (return Empty))
+        (K (K (option_check
+          (\<lambda>s. slookup (Offset p @ is) (state.Storage s this (Location p)))
+          (\<lambda>sd. storage_update_monad xs [] (K sd) l)))))
+      (modify (stack_update i (kdata.Storage (Some p))) \<bind> K (return Empty))"
 | "assign_stack i is (rvalue.Storage None) = throw Err"
 | "assign_stack i is rvalue.Empty = throw Err"
 
@@ -516,20 +589,22 @@ where
 
 section \<open>Storage Assignment\<close>
 
-fun (in Contract) assign_storage:: "id \<Rightarrow> ('a::address) valtype list \<Rightarrow> ('a::address) rvalue \<Rightarrow> ('a::address) expression_monad" where
+fun (in Contract) assign_storage::
+  "id \<Rightarrow> ('a::address) valtype list \<Rightarrow> ('a::address) rvalue \<Rightarrow> ('a::address) expression_monad"
+where
   "assign_storage i is (rvalue.Value v) = storage_update_monad [] is (K (storage_data.Value v)) i"
-| "assign_storage i is (rvalue.Memory p) =
-    (option_disjoint
-      (\<lambda>s. read_storage (state.Memory s) p)
+| "assign_storage i is (rvalue.Memory l) =
+    (option_check
+      (\<lambda>s. copy_memory_storage (state.Memory s) l)
       (\<lambda>sd. storage_update_monad [] is (K sd) i))"
-| "assign_storage i is (rvalue.Calldata (Some \<lparr>Location=p, Offset=xs\<rparr>)) =
-    (option_disjoint
-      (\<lambda>s. state.Calldata s $$ p \<bind> clookup xs)
-      (\<lambda>cd. storage_update_monad [] is (K (read_calldata_storage cd)) i))"
+| "assign_storage i is (rvalue.Calldata (Some p)) =
+    (option_check
+      (\<lambda>s. state.Calldata s $$ (Location p) \<bind> clookup (Offset p))
+      (\<lambda>cd. storage_update_monad [] is (K (copy_calldata_storage cd)) i))"
 | "assign_storage i is (rvalue.Calldata None) = throw Err"
-| "assign_storage i is (rvalue.Storage (Some \<lparr>Location=p, Offset=xs\<rparr>)) =
-    (option_disjoint
-      (\<lambda>s. slookup xs (state.Storage s this p))
+| "assign_storage i is (rvalue.Storage (Some p)) =
+    (option_check
+      (\<lambda>s. slookup (Offset p) (state.Storage s this (Location p)))
       (\<lambda>sd. storage_update_monad [] is (K sd) i))"
 | "assign_storage i is (rvalue.Storage None) = throw Err"
 | "assign_storage i is rvalue.Empty = throw Err"
@@ -543,6 +618,30 @@ definition (in Contract) assign_storage_monad
       is \<leftarrow> lfold es;
       assign_storage i is val
     }"
+
+(*
+  Note that m is evaluated first and then indexed expressions are evaluated from left to right.
+  
+  This can be seen by executing test() in the following example which outputs 3 before 1 and 2.
+  
+  pragma solidity >=0.7.0 <0.9.0;
+  
+  contract Test {
+  
+      event Log(uint _value);
+  
+      uint[5][5] myarray;
+  
+      function print(uint x) public returns (uint) {
+          emit Log(x);
+          return x;
+      }
+  
+      function test() external {
+          myarray[print(1)][print(2)] = print(3);
+      }
+  }
+*)
 
 section \<open>Loops\<close>
 
@@ -665,40 +764,45 @@ definition inv:: "'a rvalue \<times> ('a::address) state + ex \<times> ('a::addr
 definition inv_state:: "((id \<Rightarrow> ('a::address valtype) storage_data) \<times> nat \<Rightarrow> bool) \<Rightarrow> ('a::address) state \<Rightarrow> bool"
   where "inv_state i s = i (state.Storage s this, state.Balances s this)"
 
-definition post:: "('a::address) state \<Rightarrow> 'a rvalue \<times> ('a::address) state + ex \<times> ('a::address) state \<Rightarrow> ((String.literal \<Rightarrow> 'a valtype storage_data) \<times> nat \<Rightarrow> bool) \<Rightarrow> ((String.literal \<Rightarrow> 'a  valtype storage_data) \<times> nat \<Rightarrow> bool) \<Rightarrow> (('a::address) state \<Rightarrow> ('a::address) rvalue \<Rightarrow> ('a::address) state \<Rightarrow> bool) \<Rightarrow> bool" where
-  "post s r I_s I_e P \<equiv> (case r of Inl a \<Rightarrow> P s (fst a) (snd a) \<and> inv_state I_s (snd a)
-                               | Inr a \<Rightarrow> inv_state I_e (snd a))"
+definition post::
+  "('a::address) state \<Rightarrow> 'a rvalue \<times> ('a::address) state + ex \<times> ('a::address) state
+  \<Rightarrow> (('a::address) state \<Rightarrow> ('a::address) rvalue \<Rightarrow> ('a::address) state \<Rightarrow> bool) \<Rightarrow> (('a::address) state \<Rightarrow> bool)
+  \<Rightarrow> bool" where
+  "post s r I_s I_e \<equiv> (case r of Inl a \<Rightarrow> I_s s (fst a) (snd a)
+                               | Inr a \<Rightarrow> I_e (snd a))"
+
+term "post s r (K (K (inv_state i))) e"
 
 (*
   reduce post2 for "exc x" to post2 for "x"
 *)
 lemma post_exc_true:
   assumes "effect (exc x) s r"
-      and "\<And>r. effect x s r \<Longrightarrow> post s r I (K True) P"
-    shows "post s r I (K True) P"
+      and "\<And>r. effect x s r \<Longrightarrow> post s r I (K True)"
+    shows "post s r I (K True)"
   using assms(1) unfolding post_def effect_def exc_def
   apply (auto simp add:execute_simps) using assms(2) unfolding effect_def post_def
-  apply (smt (z3) case_prod_beta ex.case ex.exhaust fst_def is_Normal_def old.sum.simps(5) prod.collapse result.case_eq_if result.disc(2) result.disc(3) result.distinct_disc(1) result.sel(1) snd_def)
-  using assms(2) unfolding effect_def post_def
-  apply (smt (z3) case_prod_beta ex.case ex.exhaust old.sum.simps(5) prod.collapse result.case_eq_if result.disc(2) result.disc(3) result.sel(1))
-  by (simp add: inv_state_def)
+  by (smt (z3) case_prod_beta ex.case ex.exhaust fst_def is_Normal_def old.sum.simps(5) prod.collapse result.case_eq_if result.disc(2) result.disc(3) result.distinct_disc(1) result.sel(1) snd_def)
 
 lemma post_exc_false:
   assumes "effect (exc x) s r"
-      and "\<And>r. effect x s r \<Longrightarrow> post s r I (K False) P"
-    shows "post s r I (K False) P"
+      and "\<And>r. effect x s r \<Longrightarrow> post s r I (K False)"
+    shows "post s r I (K False)"
   using assms(1) unfolding post_def effect_def exc_def
   apply (auto simp add:execute_simps) using assms(2) unfolding effect_def post_def
   apply (smt (z3) case_prod_beta ex.case ex.exhaust fst_def is_Normal_def old.sum.simps(5) prod.collapse result.case_eq_if result.disc(2) result.disc(3) result.distinct_disc(1) result.sel(1) snd_def)
   using assms(2) unfolding effect_def post_def
-  apply (smt (z3) case_prod_beta ex.case ex.exhaust old.sum.simps(5) prod.collapse result.case_eq_if result.disc(2) result.disc(3) result.sel(1))
-  by (metis (no_types, lifting) K.simps assms(2) effect_def inv_state_def old.sum.simps(6) post_def result.case_eq_if result.collapse(2) result.distinct(1) result.distinct(5) split_beta)
+  by (metis (no_types, lifting) K.simps case_prod_beta case_sum_o_inj(2) result.case_eq_if result.disc(4)
+      result.distinct_disc(5) surjective_sum)
 
+(*
+  reduce post to post2
+*)
 lemma post_true:
   assumes "effect (exc x) s r"
-      and "inv_state I s"
-      and "post s r I (K True) P"
-    shows "post s r I I P"
+      and "I' s"
+      and "post s r I (K True)"
+    shows "post s r I I'"
   using assms unfolding post_def effect_def
   apply (auto simp add: execute_simps)
   unfolding exc_def apply (simp add:execute_simps)
@@ -706,12 +810,18 @@ lemma post_true:
 
 end
 
+(*
+  TODO: do we need to add addresses to exteneral?
+*)
 locale External = Contract +
   constrains this :: "'a::address"
   fixes external::"('d \<Rightarrow> 'a expression_monad) \<Rightarrow> ('a::address) expression_monad"
   assumes external_mono[mono]: "mono_sm (\<lambda>call. external call)"
 begin
 
+(*
+  TODO: Test
+*)
 definition transfer_monad::
   "('d \<Rightarrow> 'a expression_monad) \<Rightarrow> ('a::address) expression_monad \<Rightarrow> ('a::address) expression_monad \<Rightarrow> ('a::address) expression_monad"
 ("\<langle>transfer\<rangle>")  
@@ -904,7 +1014,7 @@ definition cinit::"('a::address valtype) call_data \<Rightarrow> id \<Rightarrow
 subsection \<open>Stack Variables\<close>
 
 datatype VType =
-  TBool | TSint | TAddress | TBytes
+  TBool | TSint | TAddress | TBytes nat \<comment> \<open>width should be restricted to [1..32]\<close>
 
 subsection \<open>Default values\<close>
 
@@ -914,7 +1024,7 @@ fun default:: "VType \<Rightarrow> 'a::address valtype" where
    "default TBool = Bool False"
  | "default TSint = Uint 0"
  | "default TAddress = Address null"
- | "default TBytes = Bytes (STR ''0000000000000000000000000000000000000000000000000000000000000000'')"
+ | "default (TBytes n) = Bytes (array n (CHR 0x00))"
 
 definition decl::"VType \<Rightarrow> id \<Rightarrow> ('a::address) expression_monad"
 where
@@ -932,6 +1042,11 @@ subsection \<open>Storage Variables\<close>
 
 datatype SType =
   TValue VType | TArray nat SType | DArray SType | TMap SType SType | TEnum "SType list"
+
+term "DArray (TValue (TBytes 1))"
+ML \<open>
+val it = \<^term>\<open>DArray (TValue (TBytes 1))\<close>
+\<close>
 
 fun sdefault:: "SType \<Rightarrow> 'a::address valtype storage_data" where
    "sdefault (TValue t) = storage_data.Value (default t)"

@@ -57,10 +57,10 @@ end
 contract Ballot
   for "STR ''chairperson''": "SType.TValue TAddress"
   and "STR ''voters''": "SType.TMap (SType.TValue TAddress) (SType.TEnum [SType.TValue TSint, SType.TValue TBool, SType.TValue TAddress, SType.TValue TSint])"
-  and "STR ''proposals''": "SType.DArray (SType.TEnum [SType.TValue TBytes, SType.TValue TSint])"
+  and "STR ''proposals''": "SType.DArray (SType.TEnum [SType.TValue (TBytes 32), SType.TValue TSint])"
 
 constructor payable
-  memory "STR ''proposalNames''": "SType.DArray (SType.TValue TBytes)"
+  memory "STR ''proposalNames''": "SType.DArray (SType.TValue (TBytes 32))"
 where
   "do {
     assign_storage_monad (STR ''chairperson'') [] sender_monad;
@@ -68,7 +68,7 @@ where
     init (Uint 0) (STR ''i'');
     while_monad (less_monad (stackLookup (STR ''i'') []) (arrayLength (STR ''proposalNames'') []))
       (do {
-        allocate (STR ''proposals'') [] (Proposal (storage_data.Value (Bytes STR ''0000000000000000000000000000000000000000000000000000000000000000'')) (storage_data.Value (Uint 0)));
+        allocate (STR ''proposals'') [] (Proposal (storage_data.Value (Bytes (array 32 (CHR 0x00)))) (storage_data.Value (Uint 0)));
         assign_storage_monad (STR ''proposals'') [storeArrayLength (STR ''proposals'') [], sint_monad 0] (stackLookup (STR ''proposalNames'') [stackLookup (STR ''i'') []]);
         assign_storage_monad (STR ''proposals'') [storeArrayLength (STR ''proposals'') [], sint_monad 1] (sint_monad 0);
         assign_stack_monad (STR ''i'') [] (plus_monad (stackLookup (STR ''i'') []) (sint_monad 1))
@@ -350,7 +350,7 @@ lemma kdequals2[wpdrules]:
   using assms
   apply (cases x;simp add: kdequals_def)
   apply (cases y;simp add: kdequals_def)
-  by (case_tac x4;case_tac x4a;simp add: kdequals_def)
+  by (case_tac x4;case_tac x4a;simp add: kdequals_def split: if_split_asm)
 
 lemma kdequals3[wpdrules]:
   assumes "kdequals x y = Some (rvalue.Value (Bool False))"
@@ -358,7 +358,7 @@ lemma kdequals3[wpdrules]:
   using assms
   apply (cases x;simp add: kdequals_def)
   apply (cases y;simp add: kdequals_def)
-  by (case_tac x4;case_tac x4a;simp add: kdequals_def)
+  by (case_tac x4;case_tac x4a;simp add: kdequals_def split: if_split_asm)
 
 lemma wp_less_monad[wprules]:
   assumes "wp lm (\<lambda>a. wp (rm \<bind> (\<lambda>rv. option Err (K (kdless a rv)) \<bind> return)) P E) E s"
@@ -392,38 +392,49 @@ declare sum_votesI[wprules del]
 end
 
 verification sum_votes:
-  "sum_votes"
-  "K (K True)" "K (K (K (K True)))"
-  "giveRightToVote" "K (K True)" "K (K (K (K True)))" and
-  "delegate" "K (K True)" "K (K (K (K True)))" and
-  "vote" "K (K True)" "K (K (K (K True)))" and
-  "winningProposal" "K (K True)" "K (K (K (K True)))"
+  sum_votes
+  giveRightToVote and
+  delegate and
+  vote and
+  winningProposal
   for "Ballot"
 proof -
-  show "\<And>call proposalNames. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow>
-       effect (constructor call proposalNames) s r \<Longrightarrow>  post s r sum_votes (K True) (K (K (K (K True))) proposalNames)"
+  show
+    "\<And>call.
+      (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r)
+      \<Longrightarrow> \<exists>da. ar = adata.Array da \<and> (\<forall>y<length da. \<exists>bt. da ! y = adata.Value (Bytes bt))
+      \<Longrightarrow> effect (constructor call ar) s r
+      \<Longrightarrow> post s r (K (K (inv_state sum_votes))) (K True)"
     unfolding constructor_def
     apply (erule post_exc_true, erule_tac post_wp)
     unfolding  inv_state_def
-  by (vcg wprules: sum_votesI | auto)+
-next
-  show "\<And>call voter. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow>
-       effect (giveRightToVote call voter) s r \<Longrightarrow> inv_state sum_votes s \<Longrightarrow> post s r sum_votes (K True) (K (K (K (K True))) voter)"
+    by (vcg wprules: sum_votesI | auto)+
+
+  show
+    "\<And>call voter.
+      (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r)
+      \<Longrightarrow> effect (giveRightToVote call voter) s r
+      \<Longrightarrow> inv_state sum_votes s
+      \<Longrightarrow> post s r (K (K (inv_state sum_votes))) (K True)"
     unfolding giveRightToVote_def
     apply (erule post_exc_true, erule_tac post_wp)
     unfolding inv_state_def
     apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
-    apply (auto simp add:wpsimps intro!: wpthrow)
-    apply (rule_tac voters=mp and x="Address voter" in obtain_voters, assumption)
-    apply (wp | auto simp add:wpsimps)+
-    apply (rule_tac mp="mp(Address voter := storage_data.Array [storage_data.Value (Uint 1), storage_data.Value (Bool False), storage_data.Value (Address d), storage_data.Value (Uint v)])" in sum_votesI)
-    apply (wp | auto simp add:wpsimps dest:sym)+
-    apply (rule inv_0;assumption)
-    apply (wp | auto simp add:wpsimps)+
-  done
+                        apply (auto simp add:wpsimps intro!: wpthrow)
+       apply (rule_tac voters=mp and x="Address voter" in obtain_voters, assumption)
+       apply (wp | auto simp add:wpsimps)+
+       apply (rule_tac mp="mp(Address voter := storage_data.Array [storage_data.Value (Uint 1), storage_data.Value (Bool False), storage_data.Value (Address d), storage_data.Value (Uint v)])" in sum_votesI)
+          apply (wp | auto simp add:wpsimps dest:sym)+
+      apply (rule inv_0;assumption)
+     apply (wp | auto simp add:wpsimps)+
+    done
 
-  show "\<And>call to. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow>
-       effect (delegate call to) s r \<Longrightarrow> inv_state sum_votes s \<Longrightarrow> post s r sum_votes (K True) (K (K (K (K True))) to)"
+  show
+    "\<And>call to.
+      (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r)
+      \<Longrightarrow> effect (delegate call to) s r
+      \<Longrightarrow> inv_state sum_votes s
+      \<Longrightarrow> post s r (K (K (inv_state sum_votes))) (K True)"
     unfolding delegate_def
     apply (erule post_exc_true, erule_tac post_wp)
     unfolding  inv_state_def
@@ -432,50 +443,54 @@ next
     apply wp
     apply (rule_tac voters=mp and x="Address msg_sender" in obtain_voters, blast)
     apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
-    apply (rule_tac iv ="\<lambda>s'. state.Storage s' this STR ''voters'' = state.Storage s this STR ''voters'' \<and>
-                              state.Storage s' this STR ''proposals'' = state.Storage s this STR ''proposals'' \<and>
-                              state.Storage s' this STR ''chairperson'' = state.Storage s this STR ''chairperson'' \<and>
-                              state.Stack s' $$ (STR ''sender'') = Some (kdata.Storage (Some \<lparr>Location=STR ''voters'', Offset= [Address msg_sender]\<rparr>)) \<and>
-                              (\<exists>x. (Stack s' $$ STR ''to'' = Some (kdata.Value (Address x)) \<and> x \<noteq> msg_sender))"  in wpwhile)
-    apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
-    apply (safe)[1]
-    apply (auto simp add:wpsimps intro!: wpthrow)
-    apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
-    apply (auto simp add:wpsimps intro!: wpthrow)
-    apply (auto simp add:wpsimps dest: sym)[1]
-    apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
-    apply (auto simp add:wpsimps intro!: wpthrow)
-    apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
-    apply (auto simp add:wpsimps)[1]
-    apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
-    apply (auto simp add:wpsimps)[1]
-    apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
-    apply (auto simp add:wpsimps)[1]
-    apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
-    apply (auto simp add:wpsimps)[1]
-    apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
-    apply (auto simp add:wpsimps intro!: wpthrow)
-    apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
-    apply (auto simp add:wpsimps)[1]
-    apply (rule_tac mp="mp
+                        apply (rule_tac iv ="\<lambda>s'. state.Storage s' this STR ''voters'' = state.Storage s this STR ''voters'' \<and>
+                                                  state.Storage s' this STR ''proposals'' = state.Storage s this STR ''proposals'' \<and>
+                                                  state.Storage s' this STR ''chairperson'' = state.Storage s this STR ''chairperson'' \<and>
+                                                  state.Stack s' $$ (STR ''sender'') = Some (kdata.Storage (Some \<lparr>Location=STR ''voters'', Offset= [Address msg_sender]\<rparr>)) \<and>
+                                                  (\<exists>x. (Stack s' $$ STR ''to'' = Some (kdata.Value (Address x)) \<and> x \<noteq> msg_sender))" in wpwhile)
+                        apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
+                        apply (safe)[1]
+                        apply (auto simp add:wpsimps intro!: wpthrow)
+      apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
+                    apply (auto simp add:wpsimps intro!: wpthrow)
+      apply (auto simp add:wpsimps dest: sym)[1]
+     apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
+                        apply (auto simp add:wpsimps intro!: wpthrow)
+         apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
+         apply (auto simp add:wpsimps)[1]
+         apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
+         apply (auto simp add:wpsimps)[1]
+         apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
+         apply (auto simp add:wpsimps)[1]
+         apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
+         apply (auto simp add:wpsimps)[1]
+         apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
+                apply (auto simp add:wpsimps intro!: wpthrow)
+         apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
+         apply (auto simp add:wpsimps)[1]
+         apply (rule_tac mp="mp
                 (Address msg_sender := storage_data.Array [storage_data.Value (Uint w), storage_data.Value (Bool True), storage_data.Value (Address d), storage_data.Value (Uint v)],
                  Address x := storage_data.Array [storage_data.Value (Uint (wa + w)), storage_data.Value (Bool False), storage_data.Value (Address x), storage_data.Value (Uint va)])" in sum_votesI)
-    apply (auto simp add:wpsimps intro!: wpthrow)
-    apply (rule inv_1;assumption)
+            apply (auto simp add:wpsimps intro!: wpthrow)
+         apply (rule inv_1;assumption)
+        apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
+        apply (auto simp add:wpsimps)[1]
+       apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
+       apply (auto simp add:wpsimps)[1]
+      apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
+      apply (auto simp add:wpsimps)[1]
+     apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
+     apply (auto simp add:wpsimps)[1]
     apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
     apply (auto simp add:wpsimps)[1]
-    apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
-    apply (auto simp add:wpsimps)[1]
-    apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
-    apply (auto simp add:wpsimps)[1]
-    apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
-    apply (auto simp add:wpsimps)[1]
-    apply (rule_tac voters=mp and x="Address x" in obtain_voters, assumption)
-    apply (auto simp add:wpsimps)[1]
-  done
-next
-  show "\<And>call proposal. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow>
-       effect (vote call proposal) s r \<Longrightarrow>  inv_state sum_votes s \<Longrightarrow> post s r sum_votes (K True) (K (K (K (K True))) proposal)"
+    done
+
+  show
+    "\<And>call proposal.
+      (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r)
+      \<Longrightarrow> effect (vote call proposal) s r
+      \<Longrightarrow> inv_state sum_votes s
+      \<Longrightarrow> post s r (K (K (inv_state sum_votes))) (K True)"
     unfolding vote_def
     apply (erule post_exc_true, erule_tac post_wp)
     unfolding  inv_state_def
@@ -483,10 +498,14 @@ next
     apply (wp)
     apply (wp)
     apply (rule_tac voters=mp and x="Address msg_sender" in obtain_voters, blast)
-  by (auto simp add:wpsimps intro!: wprules)+
-next
-  show "\<And>call winningProposalu. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow>
-       effect (winningProposal call winningProposalu) s r \<Longrightarrow>  inv_state sum_votes s \<Longrightarrow> post s r sum_votes (K True) (K (K (K (K True))) winningProposalu)"
+    by (auto simp add:wpsimps intro!: wprules)+
+
+  show
+    "\<And>call winningProposalu.
+      (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r)
+      \<Longrightarrow> effect (winningProposal call winningProposalu) s r
+      \<Longrightarrow> inv_state sum_votes s
+      \<Longrightarrow> post s r (K (K (inv_state sum_votes))) (K True)"
     unfolding winningProposal_def
     apply (erule post_exc_true, erule_tac post_wp)
     unfolding  inv_state_def
@@ -499,15 +518,15 @@ next
                   \<and> (\<exists>x. (Stack s' $$ STR ''p'' = Some (kdata.Value (Uint x))))
                   \<and> (\<exists>x. (Stack s' $$ STR ''winningVoteCount'' = Some (kdata.Value (Uint x))))
                   \<and> (\<exists>x. (Stack s' $$ STR ''winningProposalu'' = Some (kdata.Value (Uint x))))" in wpwhile)
-    apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
-    apply (auto simp add:wpsimps intro!: wpthrow)
-    apply vcg
-    apply (rule_tac ya=x in obtain_props, assumption)
-    apply (auto simp add:wpsimps intro!: wpthrow)
-    apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
+     apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
+            apply (auto simp add:wpsimps intro!: wpthrow)
+     apply vcg
+                        apply (rule_tac ya=x in obtain_props, assumption)
+                        apply (auto simp add:wpsimps intro!: wpthrow)
+        apply (vcg | solve\<open>auto simp add:wpsimps\<close>)+
     apply (rule_tac mp=mp and da=a in sum_votesI)
-    apply (auto simp add:wpsimps intro!: wpthrow)
-  done
+       apply (auto simp add:wpsimps intro!: wpthrow)
+    done
 qed
 
 context ballot_external

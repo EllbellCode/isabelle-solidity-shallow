@@ -22,7 +22,7 @@ lemma (in Contract) wp_assign_stack_kdvalue_memory[wprules]:
     shows "wp (assign_stack i xs (rvalue.Value v)) P E s"
   apply wp+
   using assms(1)
-  apply (simp add:stack_disjoint_def)
+  apply (simp add:stack_check_def)
   apply wp+
   apply (auto simp add:memory_update_monad_def my_update_monad_def)
   apply wp+
@@ -47,7 +47,7 @@ lemma (in Contract) wp_assign_stack_memory[wprules]:
   shows "wp (assign_stack i is (rvalue.Memory l)) P E s"
   apply wp+
   using assms(1)
-  apply (simp add:stack_disjoint_def)
+  apply (simp add:stack_check_def)
   apply wp+
   apply (auto simp add:memory_update_monad_def my_update_monad_def)
   apply (cases "is")
@@ -742,7 +742,7 @@ proof -
   ultimately show ?thesis using L_def assms by auto
 qed
 
-lemma mlookup_range_write_2:
+lemma mlookup_range_write_3:
   assumes "Memory.write a m = (l1, m')"
       and "mlookup m is l2 = Some (the (mlookup m is l2))"
       and "arange m l3 = Some (the (arange m l3))"
@@ -756,6 +756,22 @@ proof -
   moreover have "the (arange m l3) = the (arange m' l3)"
     by (metis \<open>prefix m m'\<close> assms(3) a_data.range_prefix)
   ultimately show ?thesis using assms(4) by simp
+qed
+
+lemma mlookup_range_write_2:
+  assumes "Memory.write a m = (l1, m')"
+      and "\<not> Option.is_none (alookup is a)"
+      and "arange m l2 = Some (the (arange m l2))"
+    shows "the (mlookup m' is l1) |\<notin>| the (arange m' l2)"
+proof -
+  from mlookup_some[OF assms(1), of "is"]
+  obtain l where l_def: "mlookup m' is l1 = Some l" using assms(2) by fastforce
+  moreover have "l \<notin> loc m"
+    by (metis assms(1) l_def mlookup_nin_loc_write option.sel)
+  moreover from assms obtain L where "arange m' l2 = Some L" and "fset L \<subseteq> loc m"
+    by (smt (verit) arange_def mlookup.simps(1) mlookup_range_write_3 option.sel range_range_write_2
+        range_storage_def storage_data.range_subs2 subset_iff)
+  ultimately show ?thesis by auto
 qed
 
 subsection \<open>Rules for Read\<close>
@@ -1175,7 +1191,8 @@ method mc uses lookup
   | (erule mlookup_loc_write_2)
   | (erule mlookup_nin_loc_write, solves\<open>simp\<close>)
   | (erule mlookup_range_write_1)
-  | (erule mlookup_range_write_2)
+  | (erule mlookup_range_write_2, (slookup lookup: lookup)?)
+  | (erule mlookup_range_write_3)
   | (erule locations_write_1, (slookup lookup: lookup)?)
   | (erule locations_write_2)
   | (erule locations_mupdate)

@@ -4,14 +4,14 @@ begin
 
 section \<open>Value types\<close>
 
-type_synonym bytes = String.literal
+type_synonym bytes = string
 type_synonym id = String.literal
 
 datatype ('a::address) valtype =
   Bool (bool: bool)
 | Uint (uint: "256 word")
 | Address (ad: 'a)
-| Bytes bytes
+| Bytes (bytes: bytes) \<comment>\<open>bytes1, ..., bytes32\<close>
 
 instantiation valtype :: (address) vtype
 begin
@@ -91,6 +91,62 @@ declare vtmult_safe.simps[simp del]
 definition vtmod where
   "vtmod = lift_int_binary (mod)"
 
+section \<open>Operations on bytes\<close>
+
+(* indexing bytes_n returns bytes_1 *)
+fun vtbytes_index :: "('a::address) valtype \<Rightarrow> ('a::address) valtype \<Rightarrow> ('a::address) valtype option" where
+  "vtbytes_index (Bytes xs) (Uint i) = (if unat i < length xs then Some (Bytes [xs ! unat i]) else None)"
+| "vtbytes_index _ _ = None"
+
+definition zipWith :: "('a \<Rightarrow> 'b \<Rightarrow> 'c) \<Rightarrow> 'a list \<Rightarrow> 'b list \<Rightarrow> 'c list" where
+  "zipWith op xs ys = map (\<lambda> (x, y). op x y) (zip xs ys)"
+
+fun lift_bytes_binary::"(char \<Rightarrow> char \<Rightarrow> char) \<Rightarrow> ('a::address) valtype \<Rightarrow> ('a::address) valtype \<Rightarrow> ('a::address) valtype option" where
+  "lift_bytes_binary op (Bytes l) (Bytes r) = (if length l = length r then Some (Bytes (zipWith op l r)) else None)"
+| "lift_bytes_binary _ _ _ = None"
+
+fun lift_bytes_unary::"(char \<Rightarrow> char) \<Rightarrow> ('a::address) valtype \<Rightarrow> ('a::address) valtype option" where
+  "lift_bytes_unary op (Bytes l) = Some (Bytes (map op l))"
+| "lift_bytes_unary _ _ = None"
+
+definition word8_to_char :: "8 word \<Rightarrow> char" where
+  "word8_to_char w = char_of (unat w)"
+
+definition char_to_word8 :: "char \<Rightarrow> 8 word" where
+  "char_to_word8 c = of_nat (of_char c)"
+
+definition op_word8_to_char :: "(8 word \<Rightarrow> 8 word \<Rightarrow> 8 word) \<Rightarrow> (char \<Rightarrow> char \<Rightarrow> char)" where
+  "op_word8_to_char op x y = word8_to_char (op (char_to_word8 x) (char_to_word8 y))"
+
+context
+  includes bit_operations_syntax
+begin
+
+definition vtbytes_and where
+  "vtbytes_and = lift_bytes_binary (op_word8_to_char (AND))"
+
+definition vtbytes_or where
+  "vtbytes_or = lift_bytes_binary (op_word8_to_char (OR))"
+
+definition vtbytes_xor where
+  "vtbytes_xor = lift_bytes_binary (op_word8_to_char (XOR))"
+
+definition vtbytes_not where
+  "vtbytes_not = lift_bytes_unary (\<lambda> x. word8_to_char ((NOT) (char_to_word8 x)))"
+
+end
+
+fun resize_list :: "nat \<Rightarrow> 'a \<Rightarrow> 'a list \<Rightarrow> 'a list" where
+  "resize_list m pad xs =
+     (if length xs < m
+      then xs @ replicate (m - length xs) pad
+      else take m xs)"
+
+(* FIXME: add cast from other types (ints and addresses) *)
+fun vtbytes_cast :: "nat \<Rightarrow> ('a::address) valtype \<Rightarrow> ('a::address) valtype option" where
+  "vtbytes_cast m (Bytes xs) = Some (Bytes (resize_list m (CHR 0x00) xs))"
+| "vtbytes_cast m _ = None"
+
 section \<open>State\<close>
 
 subsection \<open>Definition\<close>
@@ -106,8 +162,6 @@ record ('a::address) state =
   Storage:: "('a::address, 'a::address valtype) storage"
   Stack:: "('a::address valtype) stack"
   Balances::"('a::address) balances"
-
-definition sameState where "sameState s s' \<equiv> state.Stack s' = state.Stack s \<and> state.Memory s' = state.Memory s \<and> state.Calldata s' = state.Calldata s"
 
 subsection \<open>Update Function\<close>
 

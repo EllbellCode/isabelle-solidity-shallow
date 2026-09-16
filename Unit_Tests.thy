@@ -18,6 +18,10 @@ definition "sd_false = storage_data.Value vt_false"
 definition "sd_sint8_m10 = storage_data.Value vt_sint_m10"
 definition "sd_uint8_10 = storage_data.Value vt_sint_10"
 definition "sd_address = storage_data.Value vt_address"
+definition "(sd_Array_3_true::aspace valtype storage_data) = storage_data.Array [sd_true,sd_true,sd_true]"
+definition "(sd_Array_3_false::aspace valtype storage_data) = storage_data.Array [sd_false,sd_false,sd_false]"
+definition "(sd_Array_2_3_true_false::aspace valtype storage_data) = storage_data.Array [sd_Array_3_true, sd_Array_3_false]"
+definition "(sd_Array_2_3_false_false::aspace valtype storage_data) = storage_data.Array [sd_Array_3_false, sd_Array_3_false]"
 
 definition "md_true = mdata.Value vt_true"
 definition "md_false = mdata.Value vt_false"
@@ -43,10 +47,16 @@ definition "cd_Array_2_3_false_false = call_data.Array [cd_Array_3_false, cd_Arr
   Tested with v0.8.25
 *)
 
+(*
+FIXME:
+  lookup does not work for uninitialized storage (is this intended)
+*)
+
 global_interpretation method: Method A1 250 100
   defines method_sender_monad = method.sender_monad
       and method_value_monad  = method.value_monad
       and method_timestamp_monad  = method.block_timestamp_monad
+      and method_null_monad  = method.null_monad
   by standard (auto simp add: null_def)
 
 global_interpretation contract: Contract A1 
@@ -64,7 +74,7 @@ global_interpretation contract: Contract A1
       and contract_allocate = contract.allocate
   .
 
-global_interpretation keccak256: Keccak256 id
+global_interpretation keccak256: Keccak256 id "\<lambda>x. Empty"
   defines keccak256_keccak256_monad = keccak256.keccak256_monad
   by standard simp
 
@@ -109,6 +119,8 @@ definition m' where
         md_true,
         md_true,
       mdata.Array [9,10,11]]"
+definition "mystack = fmap_of_list [(STR ''x'', kdata.Memory 8), (STR ''y'', kdata.Memory 12)]"
+definition "mystate = emptyState\<lparr>Stack := mystack, Memory := m\<rparr>"
 
 section "Constants"
 
@@ -248,6 +260,17 @@ lemma "is_Normal (execute (do {
       }) emptyState)"
   by (normalization)
 
+(*
+FIXME:
+The following should throw an exception.
+In general we are not allowed to create constants larger than 2^256-1
+
+lemma "is_Normal (execute (do {
+        assert_monad (less_monad (sint_monad (2^256)) (sint_monad (2^257)))
+      }) emptyState)"
+  by (normalization)
+*)
+
 subsection "Plus monad"
 
 (*
@@ -320,6 +343,15 @@ lemma "is_Normal (execute (do {
         assert_monad (equals_monad (minus_monad (sint_monad 6) (sint_monad 5)) (sint_monad 1))
       }) emptyState)"
   by (normalization)
+
+(*
+
+FIXME: Does not work
+lemma "is_Normal (execute (do {
+        assert_monad (equals_monad (minus_monad (sint_monad 5) (sint_monad 6)) (sint_monad (2^^256 - 5)))
+      }) emptyState)"
+  sorry
+*)
 
 subsection "Minus monad safe"
 
@@ -569,6 +601,7 @@ lemma "is_Normal (execute (do {
         assert_monad (equals_monad (contract_storeLookup (STR ''x'') [sint_monad 0, false_monad]) (sint_monad 5))
       }) state30)" by normalization
 
+(*CHeck from here*)
 section "Stack lookup"
 
 subsection "Value type"
@@ -1493,5 +1526,376 @@ lemma "is_Exception (execute (do {
       }
   }
 *)
+
+definition "pstoragex = (\<lambda>_. undefined) (STR ''array'' := storage_data.Array [storage_data.Value (Uint 5),storage_data.Value (Uint 3),storage_data.Value (Uint 8),storage_data.Value (Uint 2),storage_data.Value (Uint 1),storage_data.Value (Uint 1),storage_data.Value (Uint 7),storage_data.Value (Uint 9),storage_data.Value (Uint 11),storage_data.Value (Uint 4)])"
+definition "storagex = (\<lambda>_. undefined) (A1 := pstoragex)"
+definition "statex = emptyState\<lparr>Storage := storagex\<rparr>"
+
+(*SORTING*)
+(*
+
+pragma solidity = 0.8.25;
+
+contract Test {
+    uint8[10] sarray;
+
+    constructor() {
+        sarray = [5,7,4,2,8,7,9,4,5,1];
+    }
+
+    function sort() public {
+        uint8[10] memory array = sarray;
+        bool swapped = true;
+        while (swapped) 
+        {
+            swapped = false;
+            for (uint8 i=0; i < 9; i++) 
+            {
+                uint8 current = array[i];
+                uint8 next = array [i+1];
+                if (current > next) {
+                    array[i] = next;
+                    array[i+1] = current;
+                    swapped = true;
+                }
+            }
+        }
+        sarray = array;
+    }
+
+      // function that returns entire array
+    function getArray() public returns (uint8[10] memory) {
+        return sarray;
+    }
+}
+
+*)
+
+
+(*************************************************************************************)
+(* Additional unit tests *)
+(*************************************************************************************)
+
+(* Test bytes1, ..., bytes32 *)
+(* Missing: constant value assignment *)
+
+
+(* The following gives compile error - index out of bounds *)
+(*
+pragma solidity = 0.8.25;
+
+contract Test {
+    bytes3 x = hex"112233";
+
+    function test() public view {
+        assert(x[3] == 0);
+    }
+}
+*)
+
+(* We only prove that it does not execute normally *)
+lemma 
+  shows "let pstorage = 
+                ((\<lambda>_. undefined) 
+                   (STR ''x'' := storage_data.Value (Bytes [CHR 0x01, CHR 0x02, CHR 0x03])));
+            storage = (\<lambda>_. undefined) (A1 := pstorage);
+            state = emptyState\<lparr>Storage := storage\<rparr>
+         in is_Exception (execute (do {
+              assert_monad (equals_monad (bytes_index_monad (contract_storeLookup (STR ''x'') []) (sint_monad 3)) (sint_monad 0))
+           }) state)"
+  by normalization
+
+
+(*
+pragma solidity = 0.8.25;
+
+contract Test {
+    bytes3 x;
+    bytes3 y = hex"000000";
+
+    function test() public view {
+        assert (x[1] == y);
+    }
+}
+*)
+
+lemma 
+  shows "let pstorage = 
+                ((\<lambda>_. undefined) 
+                   (STR ''x'' := storage_data.Value (Bytes [CHR 0xAA, CHR 0xBB, CHR 0xCC])))
+                   (STR ''y'' := storage_data.Value (Bytes [CHR 0xBB]));
+            storage = (\<lambda>_. undefined) (A1 := pstorage);
+            state = emptyState\<lparr>Storage := storage\<rparr>
+         in is_Normal (execute (do {
+              assert_monad (equals_monad (bytes_index_monad (contract_storeLookup (STR ''x'') []) (sint_monad 1)) (contract_storeLookup (STR ''y'') []))
+            }) state)"
+  by normalization
+
+
+(*
+pragma solidity = 0.8.25;
+
+contract Test {
+    bytes3 x = hex"AABBCC";
+    bytes1 y = hex"BB";
+
+    function test() public view {
+        assert (x[1] == y);
+    }
+}
+*)
+
+lemma 
+  shows "let pstorage = 
+                ((\<lambda>_. undefined) 
+                   (STR ''x'' := storage_data.Value (Bytes [CHR 0xAA, CHR 0xBB, CHR 0xCC])))
+                   (STR ''y'' := storage_data.Value (Bytes [CHR 0xBB]));
+            storage = (\<lambda>_. undefined) (A1 := pstorage);
+            state = emptyState\<lparr>Storage := storage\<rparr>
+         in is_Normal (execute (do {
+              assert_monad (equals_monad (bytes_index_monad (contract_storeLookup (STR ''x'') []) (sint_monad 1)) (contract_storeLookup (STR ''y'') []))
+            }) state)"
+  by normalization
+
+(*
+pragma solidity = 0.8.25;
+
+contract Test {
+    bytes3 x = hex"AABBCC";
+    bytes3 y = hex"AABBCC";
+
+    function test() public view {
+        assert (x == y);
+    }
+}
+*)
+
+lemma 
+  shows "let pstorage = 
+                ((\<lambda>_. undefined) 
+                   (STR ''x'' := storage_data.Value (Bytes [CHR 0xAA, CHR 0xBB, CHR 0xCC])))
+                   (STR ''y'' := storage_data.Value (Bytes [CHR 0xAA, CHR 0xBB, CHR 0xCC]));
+            storage = (\<lambda>_. undefined) (A1 := pstorage);
+            state = emptyState\<lparr>Storage := storage\<rparr>
+         in is_Normal (execute (do {
+              assert_monad (equals_monad (contract_storeLookup (STR ''x'') []) (contract_storeLookup (STR ''y'') []))
+            }) state)"
+  by normalization
+
+(*
+pragma solidity = 0.8.25;
+
+contract Test {
+    bytes3 x = hex"AABBCC";
+    bytes4 y = hex"00AABBCC";
+
+    function test() public view {
+        assert (x == y);
+    }
+}
+*)
+
+lemma 
+  shows "let pstorage = 
+                ((\<lambda>_. undefined) 
+                   (STR ''x'' := storage_data.Value (Bytes [CHR 0xAA, CHR 0xBB, CHR 0xCC])))
+                   (STR ''y'' := storage_data.Value (Bytes [CHR 0x00, CHR 0xAA, CHR 0xBB, CHR 0xCC]));
+            storage = (\<lambda>_. undefined) (A1 := pstorage);
+            state = emptyState\<lparr>Storage := storage\<rparr>
+         in is_Exception (execute (do {
+              assert_monad (equals_monad (contract_storeLookup (STR ''x'') []) (contract_storeLookup (STR ''y'') []))
+            }) state)"
+  by normalization
+
+(*
+pragma solidity = 0.8.25;
+
+contract Test {
+    bytes3 x = hex"AABBCC";
+    bytes4 y = hex"AABBCC00";
+
+    function test() public view {
+        assert (x == y);
+    }
+}
+*)
+
+lemma 
+  shows "let pstorage = 
+                ((\<lambda>_. undefined) 
+                   (STR ''x'' := storage_data.Value (Bytes [CHR 0xAA, CHR 0xBB, CHR 0xCC])))
+                   (STR ''y'' := storage_data.Value (Bytes [CHR 0xAA, CHR 0xBB, CHR 0xCC, CHR 0x00]));
+            storage = (\<lambda>_. undefined) (A1 := pstorage);
+            state = emptyState\<lparr>Storage := storage\<rparr>
+         in is_Exception (execute (do {
+              assert_monad (equals_monad (contract_storeLookup (STR ''x'') []) (contract_storeLookup (STR ''y'') []))
+            }) state)"
+  by normalization
+
+
+(*
+pragma solidity = 0.8.25;
+
+contract Test {
+    bytes3 x = hex"123456";
+    bytes3 y = hex"F0874C";
+    bytes3 z = hex"100444";
+
+    function test() public view {
+        assert (z == x & y);
+    }
+}
+*)
+
+lemma 
+  shows "let pstorage = 
+                (((\<lambda>_. undefined) 
+                   (STR ''x'' := storage_data.Value (Bytes [CHR 0x12, CHR 0x34, CHR 0x56])))
+                   (STR ''y'' := storage_data.Value (Bytes [CHR 0xF0, CHR 0x87, CHR 0x4C])))
+                   (STR ''z'' := storage_data.Value (Bytes [CHR 0x10, CHR 0x04, CHR 0x44]));
+            storage = (\<lambda>_. undefined) (A1 := pstorage);
+            state = emptyState\<lparr>Storage := storage\<rparr>
+         in is_Normal (execute (do {
+              assert_monad (equals_monad (contract_storeLookup (STR ''z'') []) (bytes_and_monad (contract_storeLookup (STR ''x'') []) (contract_storeLookup (STR ''y'') [])))
+            }) state)"
+  by normalization
+
+(*
+pragma solidity = 0.8.25;
+
+contract Test {
+    bytes3 x = hex"123456";
+    bytes3 y = hex"F0874C";
+    bytes3 z = hex"F2B75E";
+
+    function test() public view {
+        assert (z == x | y);
+    }
+}
+*)
+
+context
+  includes bit_operations_syntax
+begin
+
+lemma "word8_to_char ((char_to_word8 (CHR 0x56)) OR (char_to_word8 (CHR 0x4C))) = CHR 0x5E"
+  by (normalization)
+  
+end
+
+lemma 
+  shows "let pstorage = 
+                (((\<lambda>_. undefined)
+                   (STR ''x'' := storage_data.Value (Bytes [CHR 0x12, CHR 0x34, CHR 0x56])))
+                   (STR ''y'' := storage_data.Value (Bytes [CHR 0xF0, CHR 0x87, CHR 0x4C])))
+                   (STR ''z'' := storage_data.Value (Bytes [CHR 0xF2, CHR 0xB7, CHR 0x5E]));
+            storage = (\<lambda>_. undefined) (A1 := pstorage);
+            state = emptyState\<lparr>Storage := storage\<rparr>
+         in is_Normal (execute (do {
+              assert_monad (equals_monad (contract_storeLookup (STR ''z'') []) (bytes_or_monad (contract_storeLookup (STR ''x'') []) (contract_storeLookup (STR ''y'') [])))
+            }) state)"
+  by normalization
+
+
+(*
+pragma solidity = 0.8.25;
+
+contract Test {
+    bytes3 x = hex"123456";
+    bytes3 y = hex"F0874C";
+    bytes3 z = hex"E2B31A";
+
+    function test() public view {
+        assert (z == x ^ y);
+    }
+}
+*)
+
+
+lemma 
+  shows "let pstorage = 
+                (((\<lambda>_. undefined)
+                   (STR ''x'' := storage_data.Value (Bytes [CHR 0x12, CHR 0x34, CHR 0x56])))
+                   (STR ''y'' := storage_data.Value (Bytes [CHR 0xF0, CHR 0x87, CHR 0x4C])))
+                   (STR ''z'' := storage_data.Value (Bytes [CHR 0xE2, CHR 0xB3, CHR 0x1A]));
+            storage = (\<lambda>_. undefined) (A1 := pstorage);
+            state = emptyState\<lparr>Storage := storage\<rparr>
+         in is_Normal (execute (do {
+              assert_monad (equals_monad (contract_storeLookup (STR ''z'') []) (bytes_xor_monad (contract_storeLookup (STR ''x'') []) (contract_storeLookup (STR ''y'') [])))
+            }) state)"
+  by normalization
+
+(*
+  pragma solidity =0.8.25;
+
+  contract Test {
+      function test() public {
+          bytes3 x;
+          bytes3 y = hex"000000";
+          assert(x == y);
+      }
+  }
+*)
+
+lemma "is_Normal (execute (do {
+        decl (TBytes 3) (STR ''x'');
+        write (adata.Value (Bytes [CHR 0x00, CHR 0x00, CHR 0x00])) (STR ''y'');
+        assert_monad (equals_monad (contract_stackLookup (STR ''x'') []) (contract_stackLookup (STR ''y'') []))
+      }) emptyState)" 
+  by normalization
+
+
+(*
+  pragma solidity =0.8.25;
+
+  contract Test {
+      function test() public {
+          bytes3 x = hex"123456";
+          bytes4 y = hex"12345600"
+          assert(bytes4(x) == y);
+      }
+  }
+*)
+
+lemma "is_Normal (execute (do {
+        write (adata.Value (Bytes [CHR 0x12, CHR 0x34, CHR 0x56])) (STR ''x'');
+        write (adata.Value (Bytes [CHR 0x12, CHR 0x34, CHR 0x56, CHR 0x00])) (STR ''y'');
+        assert_monad (equals_monad (bytes_cast_monad 4 (contract_stackLookup (STR ''x'') [])) (contract_stackLookup (STR ''y'') []))
+      }) emptyState)" 
+  by normalization
+
+(*
+  pragma solidity =0.8.25;
+
+  contract Test {
+      function test() public {
+          bytes3 x = hex"123456";
+          bytes2 y = hex"1234"
+          assert(bytes2(x) == y);
+      }
+  }
+*)
+
+lemma "is_Normal (execute (do {
+        write (adata.Value (Bytes [CHR 0x12, CHR 0x34, CHR 0x56])) (STR ''x'');
+        write (adata.Value (Bytes [CHR 0x12, CHR 0x34])) (STR ''y'');
+        assert_monad (equals_monad (bytes_cast_monad 2 (contract_stackLookup (STR ''x'') [])) (contract_stackLookup (STR ''y'') []))
+      }) emptyState)" 
+  by normalization
+
+lemma "is_Exception (execute (do {
+         bytes_monad 1 []
+      }) emptyState)"
+  by normalization
+
+lemma "is_Normal (execute (do {
+         bytes_monad 32 (array 32 CHR 0x00)
+      }) emptyState)"
+  by normalization
+
+lemma "is_Exception (execute (do {
+         bytes_monad 33 (array 33 CHR 0x00)
+      }) emptyState)"
+  by normalization
 
 end

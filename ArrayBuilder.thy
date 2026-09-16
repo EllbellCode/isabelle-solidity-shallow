@@ -18,7 +18,7 @@ abbreviation "result  \<equiv> STR ''result''"
 abbreviation "counter  \<equiv> STR ''counter''"
 abbreviation "i \<equiv> STR ''i''"
 abbreviation "itemCount \<equiv> STR ''itemCount''"
-abbreviation "Item \<equiv> SType.TEnum [SType.TValue TAddress, SType.TValue TBytes]"
+abbreviation "Item \<equiv> SType.TEnum [SType.TValue TAddress, SType.TValue (TBytes 32)]"
 
 contract ArrayBuilder
   for items: "SType.DArray Item"
@@ -55,7 +55,7 @@ subsection \<open>Specification of Invariant\<close>
 text \<open>Trivial invariant to ensure type correctness\<close>
 
 invariant myInv s
-  where "True"
+  where "length (storage_data.ar (fst s items)) < 2^256"
   for "ArrayBuilder"
 
 text \<open>Alternative introduction Rule using existential quantification\<close>
@@ -67,6 +67,7 @@ lemma(in ArrayBuilder.arrayBuilder) myInvI2:
         \<exists>em. da ! y = storage_data.Array em \<and>
           (\<exists>ad bt. em = [storage_data.Value (Address ad), storage_data.Value (Bytes bt)]))"
       and "\<exists>mp. fst s itemCount = Map mp \<and> (\<forall>y. \<exists>si. mp y = storage_data.Value (Uint si))"
+      and "length (storage_data.ar (fst s items)) < 2^256"
   shows "myInv s"
 proof -
   have True by simp
@@ -78,10 +79,10 @@ proof -
     by auto
   moreover from assms obtain mp
     where "fst s itemCount = Map mp \<and> (\<forall>y. \<exists>si. mp y = storage_data.Value (Uint si))" by auto
-  ultimately show ?thesis using myInvI by blast
+  ultimately show ?thesis using myInvI assms(3) by blast
 qed
 
-section \<open>Filter Index Function\<close>
+subsection \<open>Filter Index Function\<close>
 
 text \<open>The following function over lists is important to specify the postcondition.\<close>
 
@@ -173,7 +174,7 @@ lemma filter_index_prefix_rec_not_P:
     shows "filter_index_prefix_rec (Suc (length xs)) (length ys) P (xs @ [x]) ys"
   using assms by (cases ys,auto)
 
-section \<open>Pre/Postcondition\<close>
+subsection \<open>Pre/Postcondition\<close>
 
 definition(in Contract) filter_items where
 "filter_items state ow =
@@ -329,8 +330,7 @@ definition(in Contract) allItems where
 
 definition(in Contract) getItems_pre where
   "getItems_pre ow start_state \<equiv>
-    length (storage_data.ar (state.Storage start_state this items)) < 2^256
-  \<and> length (allItems (storage_data.ar (state.Storage start_state this items)) ow)
+    length (allItems (storage_data.ar (state.Storage start_state this items)) ow)
     = unat (valtype.uint (storage_data.vt
         (storage_data.mp (state.Storage start_state this itemCount) (valtype.Address ow))))"
 
@@ -379,38 +379,41 @@ proof -
     by auto
 qed
 
-section \<open>While Invariant\<close>
-
-definition(in Contract) while_inv where
-  "while_inv own state \<equiv>
-    pred_some (\<lambda>xs. \<exists>ar. xs = adata.Array ar \<and> filter_items_prefix (unat (valtype.uint (kdata.vt (state.Stack state $$! i)))) (state.Storage state this items) (valtype.ad (kdata.vt (state.Stack state $$! owner))) (map (unat \<circ> valtype.uint \<circ> adata.vt) (take (unat (valtype.uint (kdata.vt (state.Stack state $$! counter)))) ar))) (aread (State.Memory state) (kdata.memloc (state.Stack state $$! result)))
-    \<and> adisjoint (state.Memory state) (the (arange (state.Memory state) (kdata.memloc (state.Stack state $$! result))))
-    \<and> state.Stack state $$ owner = Some (kdata.Value own)
-    \<and> length (allItems (storage_data.ar (state.Storage state this items)) (valtype.ad own)) = unat (valtype.uint (storage_data.vt (storage_data.mp (state.Storage state this itemCount) own)))
-    \<and> pred_some (\<lambda>xs. length (adata.ar xs) = length (allItems (storage_data.ar (state.Storage state this items)) (valtype.ad own))) (aread (State.Memory state) (kdata.memloc (state.Stack state $$! result)))
+subsection \<open>While Invariant\<close>
+definition(in Contract) while_inv2 where
+  "while_inv2 state \<equiv>
+    (\<exists>x. state.Stack state $$ owner = Some (kdata.Value x))
     \<and> (\<exists>ml. state.Stack state $$ result = Some (kdata.Memory ml)
         \<and> ml < length (state.Memory state)
         \<and> (\<exists>ma0. state.Memory state ! ml = mdata.Array ma0
             \<and> (\<forall>i<length ma0. (ma0 ! i) < length (state.Memory state) \<and> (\<exists>ix. state.Memory state ! (ma0!i) = mdata.Value (valtype.Uint ix)))))
     \<and> (\<exists>x. state.Stack state $$ i = Some (kdata.Value (valtype.Uint x)))
     \<and> (\<exists>x. state.Stack state $$ counter = Some (kdata.Value (valtype.Uint x)))
-    \<and> unat (valtype.uint (kdata.vt (state.Stack state $$! counter))) = length (allItems (take (unat (valtype.uint (kdata.vt (state.Stack state $$! i)))) (storage_data.ar (state.Storage state this items))) (valtype.ad own))
-    \<and> unat (valtype.uint (kdata.vt (state.Stack state $$! counter))) \<le> unat (valtype.uint (kdata.vt (state.Stack state $$! i)))
     \<and> length (storage_data.ar (state.Storage state this items)) < 2^256
     \<and> (\<exists>da. (state.Storage state this items) = storage_data.Array da \<and>
       (\<forall>y<length da.
         \<exists>em. da ! y = storage_data.Array em \<and>
          (\<exists>ad bt. em = [storage_data.Value (Address ad), storage_data.Value (Bytes bt)])))
     \<and> (\<exists>mp. state.Storage state this itemCount = Map mp \<and>
-        (\<forall>y. \<exists>si. mp y = storage_data.Value (Uint si)))
-    \<and> arange (state.Memory state) (kdata.memloc (state.Stack state $$! result)) = Some (the (arange (state.Memory state) (kdata.memloc (state.Stack state $$! result))))"
+        (\<forall>y. \<exists>si. mp y = storage_data.Value (Uint si)))"
+
+definition(in Contract) while_inv where
+  "while_inv own state \<equiv>
+    while_inv2 state
+    \<and> arange (state.Memory state) (kdata.memloc (state.Stack state $$! result)) = Some (the (arange (state.Memory state) (kdata.memloc (state.Stack state $$! result))))
+    \<and> length (allItems (storage_data.ar (state.Storage state this items)) (valtype.ad own)) = unat (valtype.uint (storage_data.vt (storage_data.mp (state.Storage state this itemCount) own)))
+    \<and> pred_some (\<lambda>xs. \<exists>ar. xs = adata.Array ar \<and> filter_items_prefix (unat (valtype.uint (kdata.vt (state.Stack state $$! i)))) (state.Storage state this items) (valtype.ad (kdata.vt (state.Stack state $$! owner))) (map (unat \<circ> valtype.uint \<circ> adata.vt) (take (unat (valtype.uint (kdata.vt (state.Stack state $$! counter)))) ar))) (aread (State.Memory state) (kdata.memloc (state.Stack state $$! result)))
+    \<and> adisjoint (state.Memory state) (the (arange (state.Memory state) (kdata.memloc (state.Stack state $$! result))))
+    \<and> state.Stack state $$ owner = Some (kdata.Value own)
+    \<and> pred_some (\<lambda>xs. length (adata.ar xs) = length (allItems (storage_data.ar (state.Storage state this items)) (valtype.ad own))) (aread (State.Memory state) (kdata.memloc (state.Stack state $$! result)))
+    \<and> unat (valtype.uint (kdata.vt (state.Stack state $$! counter))) = length (allItems (take (unat (valtype.uint (kdata.vt (state.Stack state $$! i)))) (storage_data.ar (state.Storage state this items))) (valtype.ad own))
+    \<and> unat (valtype.uint (kdata.vt (state.Stack state $$! counter))) \<le> unat (valtype.uint (kdata.vt (state.Stack state $$! i)))"
 
 lemma(in Contract) while_init:
   assumes "unat (valtype.uint (kdata.vt (state.Stack state $$! i))) = 0"
       and "unat (valtype.uint (kdata.vt (state.Stack state $$! counter))) = 0"
       and "adisjoint (state.Memory state) (the (arange (state.Memory state) (kdata.memloc (state.Stack state $$! result))))"
       and "state.Stack state $$ owner = Some (kdata.Value own)"
-      and "length (allItems (storage_data.ar (state.Storage state this items)) (valtype.ad own)) = unat (valtype.uint (storage_data.vt (storage_data.mp (state.Storage state this itemCount) own)))"
       and "length (storage_data.ar (state.Storage state this items)) < 2^256"
       and "pred_some (\<lambda>xs. length (adata.ar xs) = length (allItems (storage_data.ar (state.Storage state this items)) (valtype.ad own))) (aread (State.Memory state) (kdata.memloc (state.Stack state $$! result)))"
       and "(\<exists>ml. state.Stack state $$ result = Some (kdata.Memory ml)
@@ -430,8 +433,28 @@ lemma(in Contract) while_init:
       and "(\<exists>mp. state.Storage state this itemCount = Map mp \<and>
         (\<forall>y. \<exists>si. mp y = storage_data.Value (Uint si)))"
       and "arange (state.Memory state) (kdata.memloc (state.Stack state $$! result)) = Some (the (arange (state.Memory state) (kdata.memloc (state.Stack state $$! result))))"
+      and "length (allItems (storage_data.ar (state.Storage state this items)) (valtype.ad own)) = unat (valtype.uint (storage_data.vt (storage_data.mp (state.Storage state this itemCount) own)))"
     shows "while_inv own state"
-  using assms unfolding while_inv_def
+  using assms unfolding while_inv_def while_inv2_def
+  by (simp add:pred_some_def filter_items_prefix_def filter_index_prefix_def allItems_def)
+
+lemma(in Contract) while_init2:
+  assumes "\<exists>x. state.Stack state $$ owner = Some (kdata.Value x)"
+      and "length (storage_data.ar (state.Storage state this items)) < 2^256"
+      and "(\<exists>ml. state.Stack state $$ result = Some (kdata.Memory ml)
+            \<and> ml < length (state.Memory state)
+            \<and> (\<exists>ma0. state.Memory state ! ml = mdata.Array ma0
+                \<and> (\<forall>i<length ma0. (ma0 ! i) < length (state.Memory state) \<and> (\<exists>ix. state.Memory state ! (ma0!i) = mdata.Value (valtype.Uint ix)))))"
+      and "(\<exists>x. state.Stack state $$ i = Some (kdata.Value (valtype.Uint x)))"
+      and "(\<exists>x. state.Stack state $$ counter = Some (kdata.Value (valtype.Uint x)))"
+      and "(\<exists>da. (state.Storage state this items) = storage_data.Array da \<and>
+      (\<forall>y<length da.
+        \<exists>em. da ! y = storage_data.Array em \<and>
+         (\<exists>ad bt. em = [storage_data.Value (Address ad), storage_data.Value (Bytes bt)])))"
+      and "(\<exists>mp. state.Storage state this itemCount = Map mp \<and>
+        (\<forall>y. \<exists>si. mp y = storage_data.Value (Uint si)))"
+    shows "while_inv2 state"
+  using assms unfolding while_inv2_def
   by (simp add:pred_some_def filter_items_prefix_def filter_index_prefix_def allItems_def)
 
 lemma (in Contract) while_inv_post:
@@ -443,7 +466,7 @@ lemma (in Contract) while_inv_post:
   using assms unfolding while_inv_def getItems_post_def allItems_def pred_some_def filter_items_def filter_items_prefix_def filter_index_def
   by (auto intro: length_filter_le take_all_iff split:option.split_asm option.split)
 
-section \<open>Other\<close>
+subsection \<open>Other\<close>
 
 lemma kdequals_x_True[wpdrules]:
   assumes "kdequals yc (rvalue.Value (Bool True)) = Some (rvalue.Value (Bool False))"
@@ -590,29 +613,31 @@ lemma pred_someE:
   obtains v' where "v = Some v'" and "P v'"
   using assms unfolding pred_some_def by blast
 
-section \<open>Verifying the Contract\<close>
+subsection \<open>Verifying the Contract\<close>
 
 verification sum_votes:
   myInv
-  "K (True)" "K (K (K True))"
-  getItems getItems_pre getItems_post
+  getItems (getItems_pre, getItems_post)
   for "ArrayBuilder"
 proof -
 
-  show "\<And>call.
-       effect (constructor call) s r \<Longrightarrow>
-       (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> post s r myInv (K True) (K (K (K True)))"
+  show
+    "\<And>call.
+      effect (constructor call) s r
+      \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r)
+      \<Longrightarrow> post s r (K (K (inv_state myInv))) (K True)"
     unfolding constructor_def
     apply (erule post_exc_true, erule_tac post_wp)
     unfolding inv_state_def
     apply wp+
     by (auto simp add: wpsimps)
 
-    show "\<And>call ad.
-       effect (getItems call ad) s r \<Longrightarrow>
-       (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow>
-       getItems_pre ad s \<Longrightarrow>
-       inv_state myInv s \<Longrightarrow> post s r myInv (K True) (getItems_post ad)"
+  show
+    "\<And>call ad.
+      effect (getItems call ad) s r
+      \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r)
+      \<Longrightarrow> inv_state myInv s
+      \<Longrightarrow> post s r (K (K (inv_state myInv))) (K True)"
     unfolding getItems_def
     apply (erule post_exc_true, erule_tac post_wp)
     unfolding inv_state_def
@@ -627,20 +652,20 @@ proof -
     apply (rule_tac P = "\<lambda>y. \<exists>si. mp y = storage_data.Value (Uint si)" and x = y in allE,assumption)
     apply (rule_tac exE,assumption)
     apply wp+
-    apply (rule_tac iv="while_inv y" in wpwhile)
+    apply (rule_tac iv="while_inv2" in wpwhile)
      apply (wp)
      apply (wp)
      apply (wp)
      apply (wp)
      apply (wp)
      apply (wp)
-           apply (simp add: while_inv_def)
-          apply (simp add: while_inv_def)
-         apply (simp add: while_inv_def)
+           apply (simp add: while_inv2_def)
+          apply (simp add: while_inv2_def)
+         apply (simp add: while_inv2_def)
         defer
-        apply (simp add: while_inv_def)
-       apply (simp add: while_inv_def)
-      apply (simp add: while_inv_def)
+        apply (simp add: while_inv2_def)
+       apply (simp add: while_inv2_def)
+      apply (simp add: while_inv2_def)
      defer
      apply wp
      apply wp
@@ -685,13 +710,13 @@ proof -
       apply wp
       apply wp
       apply wp
-            apply (simp add: while_inv_def)
+            apply (simp add: while_inv2_def)
            defer
-           apply (simp add: while_inv_def)
-          apply (simp add: while_inv_def)
-         apply (simp add: while_inv_def)
-        apply (simp add: while_inv_def)
-       apply (simp add: while_inv_def)
+           apply (simp add: while_inv2_def)
+          apply (simp add: while_inv2_def)
+         apply (simp add: while_inv2_def)
+        apply (simp add: while_inv2_def)
+       apply (simp add: while_inv2_def)
       defer
       defer
       apply wp
@@ -709,21 +734,387 @@ proof -
       defer
       defer
       apply wp
-       apply (auto simp add: wpsimps while_inv_def mlookup.simps nth_safe_def split:if_split_asm)[1]
+       apply wp
+       apply (auto simp add: wpsimps while_inv2_def mlookup.simps)[1]
+      apply wp
+      apply (rule myInvI2)
+        apply (simp add: while_inv2_def)
+       apply (simp add: while_inv2_def)
+      apply (simp add: while_inv2_def)
+    (*Whileinv is established*)
+     apply (rule while_init2)
+           apply (simp add: wpsimps)
+          apply (simp add: wpsimps)
+         defer
+         defer
+         apply (simp add: wpsimps)
+        defer
+        defer
+        defer
+        apply (simp add: wpsimps write_array_typing_value)
+       apply (simp add: wpsimps)
+      apply (simp add: wpsimps)
+     apply (simp add: wpsimps)
+    (*Whileinv is preserved*)
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+          apply (simp)
+         apply (simp)
+        apply (simp)
+       defer
+       apply (simp)
+      apply (simp)
+     apply (simp)
+    apply wp
+    apply wp
+    apply wp
+     defer
+     apply (simp)
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+     defer
+     apply (simp)
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+     defer
+     apply (simp)
+    apply wp
+     defer
+     apply (auto simp add: wpsimps while_inv2_def)[1]
+     apply (erule_tac P= "\<lambda>y. y < length a \<longrightarrow> (\<exists>em. a ! y = storage_data.Array em \<and> (\<exists>ad bt. em = [storage_data.Value (Address ad), storage_data.Value (Bytes bt)]))" in allE)
+     apply (auto simp add: nth_safe_def split:if_split_asm)[1]
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+          apply (simp add: while_inv2_def)
+         apply (simp add: while_inv2_def)
+        apply (simp add: while_inv2_def)
+       defer
+       apply (simp add: while_inv2_def)
+      apply (simp add: while_inv2_def)
+     apply (simp add: while_inv2_def)
+    apply wp
+    apply wp
+     defer
+     apply wp
+    apply wp
+    apply wp
+    apply wp
+     defer
+     apply wp
+    apply wp
+     defer
+     apply wp
+      defer
       apply wp
       apply wp
-      apply (safe)
-       apply (rule while_inv_post,assumption)
-         apply (simp add: while_inv_def)
-        apply (simp add:mlookup.simps)
-       apply (simp add: while_inv_def)[1]
-       apply safe
-       apply (drule kdless_uint_length_false)
+    (*2 subgoals: if is true and if is false*)
+     defer
+    (**If condition is false**)
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+           apply (simp)
+          apply (simp)
+         apply (simp)
+        defer
         apply (simp)
        apply (simp)
-      apply (rule myInvI2)
-       apply (simp add: while_inv_def)
-      apply (simp add: while_inv_def)
+      apply (simp)
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+           apply (simp)
+          apply (simp)
+         apply (simp)
+        defer
+        apply (simp)
+       apply (simp)
+      apply (simp)
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+      defer
+      apply wp
+      apply wp
+     defer
+     apply wp
+     apply wp
+     apply wp
+     apply (erule kdplus_safe_value_value)
+     apply simp
+    (*Careful: we need to remove the assign_stack rules in Mcalc*)
+     apply (rule wp_assign_stack_kdvalue)
+           apply (simp)
+          apply (simp)
+         apply (simp)
+        apply (simp)
+       apply (simp)
+      defer
+      apply (simp)
+     defer
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+     apply (simp add: wpsimps while_inv2_def)
+    (**If condition is true**)
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+          apply (simp add: while_inv2_def)
+         apply (simp add: while_inv2_def)
+        apply (simp add: while_inv2_def)
+       defer
+       apply (simp add: while_inv2_def)
+      apply (simp add: while_inv2_def)
+     apply (simp add: while_inv2_def)
+    apply wp
+    apply wp
+    apply wp
+     defer
+     apply wp
+     apply wp
+    apply wp
+    apply wp
+    apply (simp only:while_inv2_def)
+    apply safe
+    apply wp
+      apply wp
+      apply wp
+     apply wp
+     apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+          apply (simp add: while_inv2_def)
+         apply (simp add: while_inv2_def)
+        apply (simp add: while_inv2_def)
+       defer
+       apply (simp add: while_inv2_def)
+      apply (simp add: while_inv2_def)
+     apply (simp add: while_inv2_def)
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    defer
+    apply wp
+    apply wp
+    apply wp
+    apply (erule kdplus_safe_value_value)
+    apply simp
+    (*Careful: we need to remove the assign_stack rules in Mcalc*)
+    apply (rule wp_assign_stack_kdvalue)
+          apply (simp)
+         apply (simp)
+        apply (simp)
+       apply (simp)
+      apply (simp)
+    defer
+     apply (simp)
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+          apply (simp add: wpsimps)
+         apply (simp add: wpsimps)
+        apply (simp add: wpsimps)
+       defer
+       apply (simp add: wpsimps)
+      apply (simp add: wpsimps)
+     apply (simp add: wpsimps)
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+     defer
+     apply wp
+    apply wp
+    apply wp
+    apply (erule kdplus_safe_value_value)
+    apply (simp)
+    apply (rule wp_assign_stack_kdvalue)
+          apply (simp)
+         apply (simp add: wpsimps)
+        apply (simp add: wpsimps)
+       apply (simp add: wpsimps)
+      apply (simp add: wpsimps)
+     defer
+     apply (simp add: wpsimps)
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply wp
+    apply (simp only:while_inv2_def)
+    apply safe
+          apply (simp add: wpsimps)
+         defer
+         apply (simp add: wpsimps)
+        apply (simp add: wpsimps)
+       apply (simp add: wpsimps)
+      apply (simp add: wpsimps)
+     apply (simp add: wpsimps)
+     apply (simp add: wpsimps mupdate_array_typing_value)
+    by (metis mvalue_update_length)
+
+  show
+    "\<And>call ad.
+      effect (getItems call ad) s r
+      \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r)
+      \<Longrightarrow> inv_state myInv s
+      \<Longrightarrow> getItems_pre ad s
+      \<Longrightarrow> post s r (getItems_post ad) (K True)"
+    unfolding getItems_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    apply (erule myInvE)
+    apply (erule conjE)+
+    apply wp+
+          defer
+          defer
+          apply wp+
+     defer
+     apply wp+
+    apply (rule_tac P = "\<lambda>y. \<exists>si. mp y = storage_data.Value (Uint si)" and x = y in allE,assumption)
+    apply (rule_tac exE,assumption)
+    apply wp+
+    apply (rule_tac iv="while_inv y" in wpwhile)
+     apply (wp)
+     apply (wp)
+     apply (wp)
+     apply (wp)
+     apply (wp)
+     apply (wp)
+           apply (simp add: while_inv_def while_inv2_def)
+          apply (simp add: while_inv_def while_inv2_def)
+         apply (simp add: while_inv_def while_inv2_def)
+        defer
+        apply (simp add: while_inv_def while_inv2_def)
+       apply (simp add: while_inv_def while_inv2_def)
+      apply (simp add: while_inv_def while_inv2_def)
+     defer
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+     apply wp
+      defer
+      apply wp
+     defer
+     apply wp
+       apply wp
+       apply wp
+       apply wp
+      defer
+      apply wp
+      apply wp
+      apply wp
+     defer
+     apply wp
+     apply wp
+      defer
+      apply wp
+     defer
+     apply wp
+     apply wp
+     apply wp
+      defer
+      apply wp
+     defer
+     apply (safe)[1]
+    (*
+      3 Goals left
+      - whileinv is preserved during execution
+      - whileinv implies postcondition
+      - whileinv is established
+    *)
+      defer
+    (*Whileinv establishes postcondition*)
+      apply wp
+      apply wp
+      apply wp
+      apply wp
+            apply (simp add: while_inv_def while_inv2_def)
+           defer
+           apply (simp add: while_inv_def while_inv2_def)
+          apply (simp add: while_inv_def while_inv2_def)
+         apply (simp add: while_inv_def while_inv2_def)
+        apply (simp add: while_inv_def while_inv2_def)
+       apply (simp add: while_inv_def while_inv2_def)
+      defer
+      defer
+      apply wp
+      apply wp
+       defer
+       apply wp
+       apply wp
+      defer
+      defer
+      apply wp
+      apply wp
+       defer
+       apply wp
+       apply wp
+      defer
+      defer
+      apply wp
+       apply (auto simp add: wpsimps while_inv_def while_inv2_def mlookup.simps nth_safe_def split:if_split_asm)[1]
+      apply wp
+      apply wp
+      apply (rule while_inv_post,assumption)
+        apply (simp add: while_inv_def)
+       apply (simp add:mlookup.simps)
+      apply (simp add: while_inv_def while_inv2_def)[1]
+      apply safe
+      apply (drule kdless_uint_length_false)
+       apply (simp)
+      apply (simp)
     (*Whileinv is established*)
      apply (rule while_init)
                   apply (simp add: wpsimps)
@@ -732,16 +1123,16 @@ proof -
                 apply mc
                apply (simp add: wpsimps)
               apply (simp add: wpsimps allItems_def getItems_pre_def)
-             apply (simp add: wpsimps getItems_pre_def)
-            defer
-            defer
+             defer
+             defer
+             apply (simp add: wpsimps)
             apply (simp add: wpsimps)
+           defer
+           defer
            apply (simp add: wpsimps)
-          defer
-          defer
           apply (simp add: wpsimps)
-         apply (simp add: wpsimps)
-         apply mc
+          apply mc
+         apply (simp add: wpsimps getItems_pre_def)
         defer
         apply (simp add: wpsimps allItems_def getItems_pre_def)
         apply (rule pred_some_read)
@@ -793,7 +1184,7 @@ proof -
      apply (simp)
     apply wp
      defer
-     apply (auto simp add: wpsimps while_inv_def nth_safe_def split:if_split_asm)[1]
+     apply (auto simp add: wpsimps while_inv_def while_inv2_def nth_safe_def split:if_split_asm)[1]
      apply (erule_tac P= "\<lambda>y. y < length a \<longrightarrow> (\<exists>em. a ! y = storage_data.Array em \<and> (\<exists>ad bt. em = [storage_data.Value (Address ad), storage_data.Value (Bytes bt)]))" in allE)
      apply auto
     apply wp
@@ -865,9 +1256,10 @@ proof -
      apply wp
      apply wp
      apply wp
-     apply (auto simp add: while_inv_def)[1]
+     apply (auto simp add: while_inv_def while_inv2_def)[1]
      apply wp
      apply wp
+    (*Careful: we need to remove the assign_stack rules in Mcalc*)
      apply (rule wp_assign_stack_kdvalue)
            apply (simp)
           apply (simp)
@@ -882,7 +1274,7 @@ proof -
      apply wp
      apply wp
      apply wp
-     apply (auto simp add: wpsimps while_inv_def allItems_def)[1]
+     apply (auto simp add: wpsimps while_inv_def while_inv2_def allItems_def)[1]
        apply (erule pred_someE)
        apply (rule pred_some_read,assumption)
        apply (drule kdless_uint_length_true)
@@ -916,19 +1308,19 @@ proof -
     apply wp
     apply wp
     apply wp
-          apply (simp add: while_inv_def)
-         apply (simp add: while_inv_def)
-        apply (simp add: while_inv_def)
+          apply (simp add: while_inv_def while_inv2_def)
+         apply (simp add: while_inv_def while_inv2_def)
+        apply (simp add: while_inv_def while_inv2_def)
        defer
-       apply (simp add: while_inv_def)
-      apply (simp add: while_inv_def)
-     apply (simp add: while_inv_def)
+       apply (simp add: while_inv_def while_inv2_def)
+      apply (simp add: while_inv_def while_inv2_def)
+     apply (simp add: while_inv_def while_inv2_def)
     apply wp
     apply wp
     apply wp
      defer
      apply (simp)
-    apply (simp only:while_inv_def)
+    apply (simp only:while_inv_def while_inv2_def)
     apply safe
     apply wp
     apply wp
@@ -962,6 +1354,7 @@ proof -
     apply wp
     apply (erule kdplus_safe_value_value)
     apply (simp)
+    (*Careful: we need to remove the assign_stack rules in Mcalc*)
     apply (rule wp_assign_stack_kdvalue)
           apply (simp)
          apply (simp)
@@ -997,6 +1390,7 @@ proof -
     apply wp
     apply (erule kdplus_safe_value_value)
     apply (simp)
+    (*Careful: we need to remove the assign_stack rules in Mcalc*)
     apply (rule wp_assign_stack_kdvalue)
           apply (simp add: wpsimps)
          apply (simp add: wpsimps)
@@ -1012,47 +1406,45 @@ proof -
     apply wp
     apply (erule pred_someE)
     apply (erule pred_someE)
-    apply (auto simp add: wpsimps while_inv_def allItems_def mupdate_array_typing_value)[1]
-          apply (rule pred_some_read)
-           apply mc+
-            apply (simp)
-           apply (simp)
-          defer
-          apply mc
-           apply (simp)
+    apply (auto simp add: wpsimps while_inv_def while_inv2_def allItems_def mupdate_array_typing_value)[1]
+          apply (simp add: mvalue_update_length)
+         apply mc
+         apply (simp add: wpsimps)
+        apply (rule pred_some_read)
+         apply mc+
           apply (simp)
-         apply (rule pred_some_read)
-          apply mc+
-           apply (simp)
-          apply (simp)
-         apply (drule kdless_uint_length_true,simp)
-         apply (rule updateCalldata_length)
-               apply simp
-              apply simp
-             apply simp
+         apply (simp)
+        apply (drule kdless_uint_length_true,simp)
+        apply (rule filter_items_prefix_suc_eq;simp)
+       apply mc
+        apply (simp)
+       apply (simp)
+      apply (rule pred_some_read)
+       apply mc+
+        apply (simp)
+       apply (simp)
+      apply (drule kdless_uint_length_true,simp)
+      apply (rule updateCalldata_length)
             apply simp
-           apply simp
-          apply simp
-         apply simp
-        apply (simp add: mvalue_update_length)
-       apply (drule kdless_uint_length_true,simp)
-       apply (simp add:nth_safe_def)
-       apply (erule_tac P= "\<lambda>y. y < length daa \<longrightarrow> (\<exists>em. daa ! y = storage_data.Array em \<and> (\<exists>ad bt. em = [storage_data.Value (Address ad), storage_data.Value (Bytes bt)]))" in allE)
-       apply (auto)[1]
-       apply (rule length_filter_take)
            apply simp
           apply simp
          apply simp
         apply simp
        apply simp
-      apply (drule kdless_uint_length_true,simp)
-      apply wp+
-      apply (simp add: unat_le_unat_suc)
-     defer
+      apply simp
      apply (drule kdless_uint_length_true,simp)
-     apply (rule filter_items_prefix_suc_eq;simp)
-    apply mc
-    apply (simp add: wpsimps)
+     apply (simp add:nth_safe_def)
+     apply (erule_tac P= "\<lambda>y. y < length daa \<longrightarrow> (\<exists>em. daa ! y = storage_data.Array em \<and> (\<exists>ad bt. em = [storage_data.Value (Address ad), storage_data.Value (Bytes bt)]))" in allE)
+     apply (auto)[1]
+     apply (rule length_filter_take)
+         apply simp
+        apply simp
+       apply simp
+      apply simp
+     apply simp
+    apply (drule kdless_uint_length_true,simp)
+    apply wp+
+    apply (simp add: unat_le_unat_suc)
     done
 qed
 end
