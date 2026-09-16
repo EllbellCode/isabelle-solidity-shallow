@@ -14,6 +14,7 @@ session "Isabelle-Solidity" = "HOL-Library" +
     Solidity
     Contract
     WP
+    Mcalc
     Solidity_Main
     Unit_Tests
     Bank
@@ -21,6 +22,8 @@ session "Isabelle-Solidity" = "HOL-Library" +
     Casino
     Voting
     SimpleAuction
+    Aliasing
+    ArrayBuilder
   document_files
     "root.tex"
     "orcidlink.sty"
