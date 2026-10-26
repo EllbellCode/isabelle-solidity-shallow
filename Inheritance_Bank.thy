@@ -13,11 +13,51 @@ text \<open>
 
 subsection \<open>A derived contract that adds a method\<close>
 
+text \<open>
+  \<open>Bank2\<close> adds \<open>resetTwice\<close>, which calls the inherited internal method \<open>reset\<close> twice, and \<open>noop\<close>. The proof for \<open>resetTwice\<close> uses
+  the pair of \<open>reset\<close> (\<open>reset_post\<close>, from the verification of \<open>Bank\<close>) and a lemma that \<open>reset_post\<close> preserves the sum of the balances.
+\<close>
+
+context Solidity
+begin
+
+lemma reset_pres:
+  fixes mp :: "'a::address valtype \<Rightarrow> 'a valtype storage_data" and s s' :: "'a state"
+  assumes "SUMM (state.Storage s this) \<le> Balances s this"
+      and "state.Storage s this balances = storage_data.Map mp"
+      and "\<forall>y. \<exists>si. mp y = storage_data.Value (Uint si)"
+      and "reset_post s r s'"
+    shows "\<exists>mp'. state.Storage s' this balances = storage_data.Map mp'
+             \<and> (\<forall>y. \<exists>si. mp' y = storage_data.Value (Uint si)) \<and> SUMM (state.Storage s' this) \<le> Balances s' this"
+proof -
+  from assms(3) obtain y where y: "mp (Address msg_sender) = storage_data.Value (Uint y)" by (rule bal_msg_sender)
+  from assms(4) assms(2,3) obtain mp' where
+      m': "state.Storage s' this balances = storage_data.Map mp'" "mp' (Address msg_sender) = storage_data.Value (Uint 0)"
+          "\<And>x. x \<noteq> msg_sender \<Longrightarrow> mp' (Address x) = mp (Address x)" "\<forall>y. \<exists>si. mp' y = storage_data.Value (Uint si)"
+      and bs: "Balances s = Balances s'"
+    by auto
+  have a1: "(\<Sum>ad\<in>UNIV. unat (valtype.uint (storage_data.vt (mp (Address ad))))) \<le> Balances s' this"
+    using assms(1,2) bs by simp
+  have "(\<Sum>ad\<in>UNIV. unat (valtype.uint (storage_data.vt (mp' (Address ad))))) \<le> Balances s' this - unat y"
+    by (rule sum_leq_sender[where mp = mp and mp' = mp' and sa = s' and s = s and y = y]) (use a1 y m'(2) bs m'(3) in auto)
+  then have "SUMM (state.Storage s' this) \<le> Balances s' this" using m'(1) by simp
+  with m' show ?thesis by blast
+qed
+
+end
+
 contract Bank2 is Bank
 
 constructor
 where
   "\<langle>skip\<rangle>"
+
+cfunction resetTwice external
+where
+  "do {
+    icall reset;
+    icall reset
+  }" ,
 
 cfunction noop external
 where
@@ -25,7 +65,7 @@ where
 
 text \<open>
   \<open>deposit\<close>, \<open>withdraw\<close> and \<open>reset\<close> are inherited: their obligations (and the pair of \<open>reset\<close>) come from the
-  verification of \<open>Bank\<close>. Only the constructor and the new method remain.
+  verification of \<open>Bank\<close>. Only the constructor and the new methods remain.
 \<close>
 
 verification sum_bal_bank2:
@@ -33,6 +73,7 @@ verification sum_bal_bank2:
   deposit and
   withdraw and
   reset and
+  resetTwice and
   noop
   for "Bank2"
 proof -
@@ -43,6 +84,42 @@ proof -
     apply (erule post_exc_true, erule_tac post_wp)
     unfolding inv_state_def
     by (vcg wprules: bank.sum_balI[OF bank_const] | auto)+
+
+  show "\<And>call.
+       (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow>
+       effect (resetTwice call) s r \<Longrightarrow> inv_state bank.sum_bal s \<Longrightarrow> post s r (K (K (inv_state bank.sum_bal))) (K True)"
+    unfolding resetTwice_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def icall_def
+    apply vcg
+    apply (rule_tac c=call and x=Reset_m and P'=reset_post in wp_post)
+    using vcond_reset apply simp apply blast
+    apply vcg
+    apply (rule_tac c=call and x=Reset_m and P'=reset_post in wp_post)
+    using vcond_reset apply simp apply blast
+    apply vcg
+    apply (elim conjE exE)
+    subgoal premises p for call sa saa
+    proof -
+      obtain mp where m: "state.Storage s this balances = storage_data.Map mp"
+          "\<forall>y. \<exists>si. mp y = storage_data.Value (Uint si)"
+          "(\<Sum>ad\<in>UNIV. unat (valtype.uint (storage_data.vt (mp (Address ad))))) \<le> Balances saa this"
+        using p(2) by (rule bank.sum_balE[OF bank_const]) auto
+      have b0: "Balances s this = Balances saa this" using p(3) by simp
+      have a0: "SUMM (state.Storage s this) \<le> Balances s this" using m(1,3) b0 by simp
+      have r1: "reset_post s Empty sa" using p(3,4,5) by simp
+      obtain mp1 where m1: "state.Storage sa this balances = storage_data.Map mp1"
+          "\<forall>y. \<exists>si. mp1 y = storage_data.Value (Uint si)" "SUMM (state.Storage sa this) \<le> Balances sa this"
+        using reset_pres[OF a0 m(1,2) r1] by auto
+      have r2: "reset_post sa Empty saa" using p(5,6) by simp
+      obtain mp2 where m2: "state.Storage saa this balances = storage_data.Map mp2"
+          "\<forall>y. \<exists>si. mp2 y = storage_data.Value (Uint si)" "SUMM (state.Storage saa this) \<le> Balances saa this"
+        using reset_pres[OF m1(3,1,2) r2] by auto
+      show ?thesis
+        by (rule bank.sum_balI[OF bank_const, where mp = mp2]) (use m2 in auto)
+    qed
+    apply simp_all
+    done
 
   show "\<And>call.
        (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow>
@@ -205,6 +282,7 @@ verification sum_bal_bank8:
   deposit and
   withdraw and
   reset and
+  resetTwice and
   noop
   for "Bank8"
 proof -
