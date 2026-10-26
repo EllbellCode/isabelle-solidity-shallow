@@ -74,7 +74,7 @@ global_interpretation contract: Contract A1
       and contract_allocate = contract.allocate
   .
 
-global_interpretation keccak256: Keccak256 id "\<lambda>x. Empty"
+global_interpretation keccak256: Keccak256 id "\<lambda>x. Empty" "\<lambda>x. null" "\<lambda>x. False" "\<lambda>ep st bal a f vs. None"
   defines keccak256_keccak256_monad = keccak256.keccak256_monad
   by standard simp
 

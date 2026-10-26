@@ -167,6 +167,9 @@ end
 locale Keccak256 =
   fixes keccak256::"('a::address) rvalue \<Rightarrow> ('a::address) rvalue"
   and encodeABI::"('a::address) rvalue list \<Rightarrow> ('a::address) rvalue"
+  and ecrecover::"('a::address) rvalue list \<Rightarrow> 'a"
+  and ext_isc::"('a::address) \<Rightarrow> bool"
+  and ext_result::"256 word \<Rightarrow> ('a::address, 'a valtype) storage \<Rightarrow> 'a balances \<Rightarrow> 'a \<Rightarrow> string \<Rightarrow> 'a valtype list \<Rightarrow> 'a valtype option"
   assumes "\<And>x y. keccak256 x = keccak256 y \<Longrightarrow> x = y"
 (*      and "\<And>xs ys. encodeABI xs = encodeABI ys \<Longrightarrow> xs = ys"*)
 begin
@@ -1053,7 +1056,7 @@ fun sdefault:: "SType \<Rightarrow> 'a::address valtype storage_data" where
  | "sdefault (TArray l t) = storage_data.Array (array l (sdefault t))"
  | "sdefault (DArray t) = storage_data.Array []"
  | "sdefault (TMap _ t) = storage_data.Map (mapping (sdefault t))"
- | "sdefault (TEnum xs) = storage_data.Array []"
+ | "sdefault (TEnum xs) = storage_data.Array (map sdefault xs)"
 
 definition sinit::"id \<Rightarrow> ('a::address) expression_monad" where
   "sinit i \<equiv> modify (stack_update i (kdata.Storage None)) \<bind> K (return Empty)"
