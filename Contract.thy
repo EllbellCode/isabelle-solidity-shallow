@@ -8,6 +8,7 @@ theory Contract
        and "param"
        and "calldata"
        and "payable"
+       and "assuming"
        and "verification" :: thy_goal
        and "invariant"::thy_decl
 
