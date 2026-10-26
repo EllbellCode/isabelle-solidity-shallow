@@ -13,8 +13,104 @@ declare(in Contract) inv_state_def[wpsimps]
 declare icall_def[wpsimps]
 declare ecall_def[wpsimps]
 
-method wp declares wprules wpdrules wperules wpsimps = (rule wprules | drule wpdrules | erule wperules | simp add: wpsimps)
-method vcg declares wprules wpdrules wperules wpsimps = wp+
+(*
+  Speed (patch 7). The methods wp, vcg and vcg_all were Eisbach methods whose last step was "simp add: wpsimps". Adding the several hundred
+  wpsimps to the simpset costs about 100 ms and happened at every step (a transferFrom proof needs thousands of steps; in a profile 70% of
+  the time went into this and 25% into "subst (asm) inv_state_def" failing on goals without an inv_state). They are now ML methods with the
+  same syntax (wprules:, wpdrules:, wperules:, wpsimps: sections), which add the wpsimps once per call and evaluate the Eisbach bodies below
+  (the same alternatives in the same order, with a plain "simp") in that context; inv_state_present makes the inv_state step cheap.
+
+  Patch 9 (cheap simp first, one switch). A profile of a long proof (Pool deposit: 2352 simp steps, 606 of 706 s) showed that the cost of the final "simp"
+  step is not the goal but the premises: the default simp simplifies every premise with all the others as rewrite rules, on every step (on the same goal
+  states the step took 67 s, against 13 s for "simp (no_asm)", 16 s for "simp (no_asm_use)", 22 s for "simp (no_asm_simp)"). With the configuration
+  [[vcg_fast = true]] the last step of wp, vcg and vcg_all is "simp (no_asm_use) | simp": the cheap one (premises simplified, not used as rewrite rules) first,
+  the full one only when it makes no progress. Default: false, because the full simp does something the cheap one does not: it rewrites premises with
+  other premises, e.g. a premise  Storage s this ''balances'' = Map mp  turns the premise  (!!x. Storage s this ''balances'' = Map x ==> SUMM x <= B)  into
+  SUMM mp <= B, and  kdless a b = Some yb  decides  kdequals yb True = Some False. Hand-written scripts (Bank_Gen, Bench-Proofs re_dao_fixed,
+  ar_minimal_fixed) rely on that normal form; with the cheap step they are left with the quantified premise and fail. Generated proof pipelines (Pool) do the
+  premise rewriting with clarsimp anyway, so they run in fast mode: Pool proofs 4-5x faster.
+*)
+ML \<open>
+structure WP_Method : sig end =
+struct
+  val modifiers =
+    map (fn (key, name) =>
+      Args.$$$ key -- Args.colon >> K (Method.modifier (Named_Theorems.add name) \<^here>))
+      [("wprules", "WP.wprules"), ("wpdrules", "WP.wpdrules"), ("wperules", "WP.wperules"), ("wpsimps", "WP.wpsimps")];
+
+  fun prepare ctxt = Simplifier.add_simps (Named_Theorems.get ctxt "WP.wpsimps") ctxt;
+
+  (*One switch for the whole family: [[vcg_fast = true]] makes wp, vcg and vcg_all use the cheap simplifier step (patch 9, comment above).*)
+  val vcg_fast = Attrib.setup_config_bool \<^binding>\<open>vcg_fast\<close> (K false);
+
+  fun body name ctxt =
+    Method.evaluate (Method.Source (Token.make_src ((if Config.get ctxt vcg_fast then name ^ "_fast" else name), Position.none) [])) (prepare ctxt);
+
+  fun has_inv_state t = Term.exists_Const (fn (n, _) => Long_Name.base_name n = "inv_state") t;
+
+  val _ = Theory.setup (
+    Method.setup \<^binding>\<open>wp\<close> (Method.sections modifiers >> K (body "wp_step_b")) "weakest precondition, one step" #>
+    Method.setup \<^binding>\<open>vcg\<close> (Method.sections modifiers >> K (body "wp_rep_b")) "weakest precondition, repeated on the first subgoal" #>
+    Method.setup \<^binding>\<open>vcg_all\<close> (Method.sections modifiers >> K (body "vcg_all_b")) "weakest precondition on all subgoals" #>
+    Method.setup \<^binding>\<open>inv_state_present\<close>
+      (Scan.succeed (fn _ => SIMPLE_METHOD' (SUBGOAL (fn (g, _) =>
+         if exists has_inv_state (Logic.strip_assums_hyp g) then all_tac else no_tac))))
+      "succeeds if a premise of the first subgoal mentions inv_state" #>
+    Method.setup \<^binding>\<open>with_wpsimps\<close>
+      (Method.text_closure >> (fn text => fn ctxt => Method.evaluate text (prepare ctxt)))
+      "run a method in a context whose simpset contains the wpsimps (added once)");
+end
+\<close>
+
+(*
+  The trivial exception goals "K (K True) e s" that the wp rules leave for every failing branch (E = K (K True)) were closed by simp, which
+  normalises the (large) state argument s first, about 100 ms each; a rule closes them in microseconds.
+*)
+lemma K_K_True: "K (K True) e s"
+  by simp
+
+lemma K_True: "K True s"
+  by simp
+
+method wp_step_b = (rule wprules | drule wpdrules | erule wperules | simp)
+method wp_rep_b = wp_step_b+
+method wp_step_b_fast = (rule wprules | rule K_K_True | rule K_True | drule wpdrules | erule wperules | simp (no_asm_use) | simp)
+method wp_rep_b_fast = wp_step_b_fast+
+
+(*
+  vcg applies wp to the first subgoal until it gets stuck and leaves all other subgoals
+  untouched, so a Solidity goal typically needs several calls interleaved with defer and
+  manual cleanup.
+
+  vcg_all instead recurses into every subgoal a step produces, so one call fully breaks down
+  a goal. Each step is one of:
+  - a wprules/wpdrules/wperules rule, or simp add: wpsimps. This also discharges the trivial
+    error branches produced by e.g. wpoption and wp_stackCheck
+    ("f s = None \<Longrightarrow> E x s", "Stack s $$ i = None \<Longrightarrow> ...");
+  - erule conjE, so conjunctive premises (e.g. from invariant elimination rules) become usable;
+  - hypsubst, so premises like "Address msg_sender = y" are substituted and rules such as
+    wp_readAddress fire without "dest: sym";
+  - rule conjI[OF refl], which closes witness goals "t = ?x \<and> P ?x" left by invariant
+    introduction rules (?x := t is the only solution, so this is safe).
+  Premise steps are tried before goal steps: if an introduction rule (e.g. an invariant's I rule)
+  fired first, its schematic variables could not depend on variables a later elimination
+  (e.g. after an external call) introduces, leaving unprovable goals like "x = ?y".
+  Subgoals where no step applies are left for the user. vcg_all fails only if no step applies
+  to the initial goal.
+
+  Use wp (single step) rather than vcg_all when proving wprules themselves: full decomposition
+  goes past the point where the lemma's assumptions match.
+*)
+method vcg_step_b =
+  (drule wpdrules | erule wperules | erule conjE | hypsubst | (inv_state_present, subst (asm) Contract.inv_state_def)
+   | rule wprules | rule conjI[OF refl] | simp)
+method vcg_all_b = (vcg_step_b; vcg_all_b?)
+
+(* The same with "simp (no_asm_use) | simp" as the last step, selected by [[vcg_fast = true]] (patch 9, see the comment at the top). Normal forms differ. *)
+method vcg_step_b_fast =
+  (drule wpdrules | erule wperules | erule conjE | hypsubst | (inv_state_present, subst (asm) Contract.inv_state_def)
+   | rule wprules | rule K_K_True | rule K_True | rule conjI[OF refl] | simp (no_asm_use) | simp)
+method vcg_all_b_fast = (vcg_step_b_fast; vcg_all_b_fast?)
 
 subsection "Simplification rules"
 
