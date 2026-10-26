@@ -11,6 +11,7 @@ structure Solidity_Verification: SOLIDITY_VERIFICATION =
 struct
 open Solidity_Util
 open Solidity_Data
+structure Inh = Solidity_Inheritance
 
 val _ = let
     fun mk_vcond data ct prepost invs lthy =
@@ -170,9 +171,10 @@ val _ = let
         |> export
       end;
 
-    fun verify pi call mdata name_ct inv_name vcond vcond_thm induct rules ctxt =
+    fun verify pi call mdata name_ct inv_name vcond vcond_thm induct names assemble user_rules ctxt =
       let
-        val defs = map (snd #> #def #> Morphism.thm pi) mdata
+        val rules = assemble user_rules  (*the rules of the inherited methods are added*)
+        val defs = map (snd #> #def #> Morphism.thm pi) mdata @ Named_Theorems.get ctxt "Contract.alias_defs"
         fun select_tac context (t,i) =
           let
             val concl = t |> Logic.strip_assums_concl |> HOLogic.dest_Trueprop
@@ -207,7 +209,9 @@ val _ = let
         val thm = Goal.prove ctxt' [] [asm] conc (fn {prems, context, ...} => call_tac context prems 1)
                 |> singleton (Proof_Context.export ctxt' ctxt)
       in
-        Local_Theory.note ((inv_name, []), [thm]) ctxt' |> snd |> Local_Theory.exit
+        ctxt'
+        |> fold (fn (n, ths) => Local_Theory.note ((Binding.name n, []), ths) #> snd) (names ~~ rules)  (*the obligations, for derived contracts*)
+        |> Local_Theory.note ((inv_name, []), [thm]) |> snd |> Local_Theory.exit
       end
 
     fun mk_locale data name_lc vcond invs name_ct ct thy =
@@ -242,7 +246,7 @@ val _ = let
         Expression.add_locale binding Binding.empty [] ([(#locale data,(("",true), (Expression.Positional [],[])))],[]) [Element.Assumes [((@{binding "external_inv"}, []), [(assumption, [])])]] thy
       end
 
-    fun mk_proof data lname inv_name vcond vcond_thms name_ct ct prepost rvs invs lthy =
+    fun mk_proof data lname inv_name vcond vcond_thms name_ct ct prepost rvs invs inherited ovr lthy =
       let
         val pi = Proof_Context.theory_of lthy |> get_morphism (#locale data) lname;
         val vcond_thms' = map (Morphism.thm pi) vcond_thms;
@@ -361,9 +365,28 @@ val _ = let
               , ctxt)
           end;
         val (lems, lthy) = fold_map mkcase (#methods data) lthy;
+
+        (*Names of the facts that state the obligations: constructor_vc, <method>_vc (<method>_vc<i> for several), see Inheritance.ML*)
+        fun group_names (name, _) groups =
+          (case length groups of
+             1 => [name ^ "_vc"]
+           | k => map (fn i => name ^ "_vc" ^ string_of_int i) (1 upto k))
+        val names = "constructor_vc" :: flat (map2 group_names (#methods data) lems)
+
+        (*Inherited methods need no proof from the user: the obligations are those of the base; an override with its own pairs has to
+          imply the base's.*)
+        val inherited_defs = the_default [] inherited
+        val is_inherited = map (fn (m, _) => AList.defined (op =) inherited_defs m) (#methods data)
+        val ovr_goals = Inh.override_goals lthy data vcond ovr
+        val user_goals = Inh.user_goals lem is_inherited lems ovr_goals
+        fun discharge_with impls =
+          Inh.discharge {lthy = lthy, pi = pi, data = data, ct = ct, vcond = vcond, vcond_thms = vcond_thms, lems = lems} inherited_defs impls
       in
         tap (K (writeln "Proving theorem"))
-        Proof.theorem NONE (verify pi (#pfun_name data) (#methods data) name_ct inv_name vcond vcond_thms' induct) (lem::flat lems) lthy
+        Proof.theorem NONE
+          (verify pi (#pfun_name data) (#methods data) name_ct inv_name vcond vcond_thms' induct names
+             (Inh.assemble (length ovr_goals) discharge_with lems))
+          user_goals lthy
       end;
 
     fun mk_wp_rule vcond name_ct ct invs lthy =
@@ -432,7 +455,9 @@ val _ = let
         val lthy = Named_Target.init [] (Context.theory_base_name thy ^ "." ^ name_lc) thy
         val data = the (mlookupN (Proof_Context.theory_of lthy) name_lc);
         val tp = HOLogic.mk_prodT (\<^typ>\<open>String.literal\<close> --> \<^Type>\<open>storage_data \<^Type>\<open>valtype a\<close>\<close>, \<^typ>\<open>nat\<close>) --> \<^typ>\<open>bool\<close>
-        val invariant = readAs lthy tp invariant;
+        val invariant = Inh.read_invariant lthy thy name_lc tp invariant;
+        val (prepost3, ovr) = Inh.pairs_and_overrides thy name_lc invariant prepost3;
+        val lthy = lthy |> Local_Theory.background_theory (Inh.record_pairs name_lc invariant prepost3);
         fun go (name, prepost) =
           let
             val m = lookup_safe (#methods data) name;
@@ -458,6 +483,7 @@ val _ = let
           in map_filter go3 prepost3 end;
         val ct = mk_contract_typ lthy name_lc;
         val name_ct = mk_contract_typ lthy name_lc;
+        val inherited = Option.map snd (Inh.ilookupN thy name_lc);
       in
         lthy |> mk_vcond data ct prepost invariant
              |> (fn ((vcond, vcond_name, vcond_def), lthy')
@@ -466,7 +492,7 @@ val _ = let
              |> (fn ((name, thms), lthy'') => mk_locale data name_lc vcond invariant name_ct ct lthy''
              |> (fn (lname, lthy''') => mk_wp_rule vcond name_ct ct invariant lthy'''
              |> (fn ((wp_name, wp_thm), lthy'''')
-               => mk_proof data lname inv_name vcond thms name_ct ct prepost rvs invariant lthy''''))))
+               => mk_proof data lname inv_name vcond thms name_ct ct prepost rvs invariant inherited ovr lthy''''))))
       end
     in
       solidity_command Toplevel.theory_to_proof @{command_keyword "verification"}
