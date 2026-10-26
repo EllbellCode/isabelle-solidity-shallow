@@ -25,7 +25,56 @@ Isabelle/Solidity consists of the following theories:
 - `SimpleAuction.thy`: A formalization of a simple auction contract.
 - `Aliasing.thy`: The running example discussed in the paper.
 - `ArrayBuilder.thy`: Verification of a contract using memory arrays/
+- `Inheritance.ML`, `Inheritance_Bank.thy`, `Inheritance_Constructors.thy`, `Inheritance_Abstract.thy`: Inheritance for the `contract` and `verification` commands, with examples (see below).
 - `document.pdf`: A pdf document containing all the formalizations.
+
+## Inheritance
+
+A contract can inherit from other contracts, as in Solidity:
+
+```isabelle
+contract Bank2 is Bank                      (* several bases: is A, B ("arg") *)
+  for ...                                   (* own state variables *)
+constructor
+where "..."
+cfunction f external where "..." ,          (* overrides f if a base has one *)
+cfunction g abstract                        (* declared, not implemented *)
+```
+
+* **State and constructors.** The state variables of the bases come first (each once, most base-like first). The constructors run in
+  this order: the parameters of all base constructors are bound (the nearest base first, so that the arguments given for a base may use the
+  parameters of a nearer one), then the constructor bodies of the bases, most base-like first, then the body of the derived contract.
+  Arguments for a base constructor are written in the inheritance list: `contract D is B ("<monadic expression>")`.
+* **Methods.** An inherited method is an alias of the base's method, applied to the dispatcher of the derived contract composed with an
+  injection of the base's calls. Calls are therefore virtual: a call of `f` in a base reaches the override in the derived contract.
+  The linearisation is Solidity's (C3, the right-most base is the most derived); a method defined in unrelated bases has to be overridden.
+* **`super`.** `icall super_f` in a method of the derived contract runs the definition of `f` of the nearest base; a base's own
+  `super_f` reaches the next definition after it in the linearisation of the contract at hand. Only internal methods can be reached
+  (the transpiler uses an internal twin `f__int` of a public function).
+* **Abstract methods.** `cfunction f abstract` has no body (calling it reverts); a contract that inherits it should implement it.
+* **Facts.** `contract C` notes `C_const` (the contract's locale holds for a constant external function), needed to use the invariant rules
+  of a base from a derived contract: `wprules: base.invI[OF base_const]`.
+
+### Verification
+
+`verification inv m1 and m2 ... for "D"` with the invariant `base.inv` of a base (`inv` alone is found in the locales of the bases):
+
+* the obligation of an *inherited* method is that of the base and is proved automatically (from the facts `<base>_external.<m>_vc` that the
+  `verification` of the base leaves);
+* the pairs `(pre, post)` of the base are the defaults for the inherited methods (and for the hidden methods of super calls);
+* an override without its own pair has to meet the base's pair (its obligation is the base's, to be proved by the user);
+* an override with its own pair also gets the goal that its condition implies the base's (`vcond` of the derived contract for the method
+  implies `base.vcond` for the base's method), so that the base's proofs about calls of the method remain valid;
+* the user proves the constructor and the methods that are new or overridden.
+
+### Limits
+
+A base whose locale depends on the unspecified functions of the framework (hashing, `ecrecover`, calls to other contracts, an
+`assuming` clause) cannot be inherited yet (error "depends on the unspecified parameter"); constructor memory parameters of a base are
+not supported; the `vcond` facts are numbered by method position (hidden methods included).
+
+The implementation is in `Inheritance.ML`; examples and tests are in `Inheritance_Bank.thy`, `Inheritance_Constructors.thy` and
+`Inheritance_Abstract.thy`.
 
 ## Prerequisites
 
