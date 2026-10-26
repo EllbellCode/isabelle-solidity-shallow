@@ -242,7 +242,7 @@ val _ = let
         Expression.add_locale binding Binding.empty [] ([(#locale data,(("",true), (Expression.Positional [],[])))],[]) [Element.Assumes [((@{binding "external_inv"}, []), [(assumption, [])])]] thy
       end
 
-    fun mk_proof data lname inv_name vcond vcond_thms name_ct ct prepost invs lthy =
+    fun mk_proof data lname inv_name vcond vcond_thms name_ct ct prepost rvs invs lthy =
       let
         val pi = Proof_Context.theory_of lthy |> get_morphism (#locale data) lname;
         val vcond_thms' = map (Morphism.thm pi) vcond_thms;
@@ -296,6 +296,32 @@ val _ = let
                 mk_type_assms_store Calldata (#cdlist mdata) ctxt
                 |>> map HOLogic.mk_Trueprop;
 
+            (*Revert condition (optional third component of a pair): the call reverts exactly when it holds.
+              No revert: post s r (K (K True)) (K False); revert: post s r (K (K False)) (K True).*)
+            val rv_goals =
+              (case AList.lookup (op =) rvs name of
+                 NONE => []
+               | SOME rv =>
+                   let
+                     val rv_f = list_comb (rv, frees) $ s
+                     val pre_f =
+                       (case prepost of
+                          (pre, _) :: _ => [HOLogic.mk_Trueprop (list_comb (pre, frees) $ s)]
+                        | [] => [])
+                     val inv_f = if #external mdata then [HOLogic.mk_Trueprop (mk_inv_state invs $ s)] else []
+                     fun const_post b = fst (mk_K b [stateT, rvalueT, stateT])
+                     val true_t = \<^Const>\<open>True\<close>
+                     val false_t = \<^Const>\<open>False\<close>
+                     val e_true = mk_True2
+                     val e_false = fst (mk_K false_t [stateT])
+                     fun goal (prem, i, e) =
+                       Logic.list_implies
+                         (inv_f @ pre_f @ mtrms @ ctrms @ [HOLogic.mk_Trueprop prem]
+                         ,HOLogic.mk_Trueprop (post_t $ s $ r $ const_post i $ e))
+                   in
+                     [goal (HOLogic.mk_not rv_f, true_t, e_false), goal (rv_f, false_t, e_true)]
+                   end)
+
             fun go (pre, post) =
               let
                 val pre_f = list_comb (pre, frees);
@@ -316,9 +342,9 @@ val _ = let
                 Logic.list_implies
                   (HOLogic.mk_Trueprop (mk_inv_state invs $ s)::mtrms @ ctrms
                   , HOLogic.mk_Trueprop (post_t $ s $ r $ fst (mk_K (mk_inv_state invs) [stateT,rvalueT]) $ mk_True2))
-                :: prepost
+                :: (rev rv_goals @ prepost)
               else
-                prepost
+                rev rv_goals @ prepost
           (*Methods*)
           in
             (fold
@@ -400,7 +426,7 @@ val _ = let
         Local_Theory.note ((@{binding wp_external}, @{attributes [wprules]}), [thm]) lthy
       end
 
-    fun verify_invariant (inv_name, ((invariant, prepost:((string * (string * string) list) list)), contract_name)) thy =
+    fun verify_invariant (inv_name, ((invariant, prepost3:((string * ((string * string) * string option) list) list)), contract_name)) thy =
       let
         val name_lc = decapitalizeFirst contract_name;
         val lthy = Named_Target.init [] (Context.theory_base_name thy ^ "." ^ name_lc) thy
@@ -417,7 +443,19 @@ val _ = let
           in
             cons (name, prepost)
           end
-        val prepost = fold go prepost [];
+        val prepost = fold go (map (fn (n, ps) => (n, map fst ps)) prepost3) [];
+        (*revert conditions: at most one per method (the first that has one)*)
+        val rvs =
+          let
+            fun go3 (name, ps) =
+              (case get_first snd ps of
+                 NONE => NONE
+               | SOME rv =>
+                   let
+                     val m = lookup_safe (#methods data) name;
+                     val parlist = map (fst #> snd) (#parlist m @ #memlist m @ #cdlist m);
+                   in SOME (name, readAs lthy (parlist ---> stateT --> \<^typ>\<open>bool\<close>) rv) end)
+          in map_filter go3 prepost3 end;
         val ct = mk_contract_typ lthy name_lc;
         val name_ct = mk_contract_typ lthy name_lc;
       in
@@ -428,7 +466,7 @@ val _ = let
              |> (fn ((name, thms), lthy'') => mk_locale data name_lc vcond invariant name_ct ct lthy''
              |> (fn (lname, lthy''') => mk_wp_rule vcond name_ct ct invariant lthy'''
              |> (fn ((wp_name, wp_thm), lthy'''')
-               => mk_proof data lname inv_name vcond thms name_ct ct prepost invariant lthy''''))))
+               => mk_proof data lname inv_name vcond thms name_ct ct prepost rvs invariant lthy''''))))
       end
     in
       solidity_command Toplevel.theory_to_proof @{command_keyword "verification"}
@@ -437,7 +475,8 @@ val _ = let
         |-- ((Parse.term
           -- (Parse.and_list
               (Parse.name
-                -- (Parse.list ((Parse.$$$ "(") |-- Parse.term --| (Parse.$$$ ",") -- Parse.term --| (Parse.$$$ ")"))))))
+                -- (Parse.list ((Parse.$$$ "(") |-- Parse.term --| (Parse.$$$ ",") -- Parse.term
+                      -- Scan.option ((Parse.$$$ ",") |-- Parse.term) --| (Parse.$$$ ")"))))))
           -- (Parse.$$$ "for" |-- Parse.string)))
         >> verify_invariant)
     end
