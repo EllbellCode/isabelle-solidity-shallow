@@ -11,6 +11,7 @@ structure Solidity_Spec: SOLIDITY_SPEC =
 struct
 open Solidity_Util
 open Solidity_Data
+structure Inh = Solidity_Inheritance
 
 val _ = let
   val specparser =
@@ -122,7 +123,22 @@ val _ = let
                   val memlist_free = map Free memlist_f;
                   val cdlist_free = map Free cdlist_f;
                   val def_name = Thm.def_binding name
-                  val def_body = Syntax.parse_term ctxt body
+                  (*The body of an inherited method (see Inheritance.ML) is a term over the dispatcher `call` and the parameters `par__i`;
+                    it is the definition as it stands, without the entry code of a method.*)
+                  val alias_text = (case Inh.plain body of b => if String.isPrefix "ALIAS" b then SOME (String.extract (b, 5, NONE)) else NONE)
+                  val all_params = parlist_free @ memlist_free @ cdlist_free
+                  fun alias_term text =
+                    Syntax.parse_term ctxt text
+                    |> map_aterms (fn Free ("call", _) => call name_ct
+                                    | Free (n, _) => if String.isPrefix "par__" n then nth all_params (the (Int.fromString (String.extract (n, 5, NONE)))) else Free (n, dummyT)
+                                    | t => t)
+                    |> Syntax.check_term ctxt
+                    |> fold_rev lambda cdlist_free
+                    |> fold_rev lambda memlist_free
+                    |> fold_rev lambda parlist_free
+                    |> lambda (call name_ct)
+                  val def_body = (case alias_text of SOME text => alias_term text | NONE =>
+                                Syntax.parse_term ctxt body
                                 |> change_transfers name_ct (call name_ct)
                                 |> change_externals name_ct (call name_ct)
                                 |> change_internals name_ct internals cterms
@@ -140,7 +156,7 @@ val _ = let
                                 |> fold_rev lambda cdlist_free
                                 |> fold_rev lambda memlist_free
                                 |> fold_rev lambda parlist_free
-                                |> lambda (call name_ct)
+                                |> lambda (call name_ct))
 
                   fun mk_mono (f, f_def, ctxt) =
                     let
@@ -150,7 +166,7 @@ val _ = let
                         |> curry (op $) mono_sm
                         |> HOLogic.mk_Trueprop;
                       val plist_names = map fst (parlist_f @ memlist_f @ cdlist_f);
-                      val mono_tac = asm_full_simp_tac (ctxt addsimps (f_def :: (Proof_Context.get_thms ctxt ("mono"))))
+                      val mono_tac = asm_full_simp_tac (ctxt addsimps (f_def :: (Proof_Context.get_thms ctxt ("mono")) @ Named_Theorems.get ctxt "Contract.alias_defs"))
                       val thm = Goal.prove ctxt plist_names [] goal (K (mono_tac 1))
                       val mono_name = mono_binding def_name;
                     in
@@ -238,7 +254,7 @@ val _ = let
               |> (fn thy' => ((lname, con_trm, payable, con_parlist, con_memlist, con_name, con_thm, mono_name, mono_thm, ms, pt, pthm, pinduct, variables), thy')))))
         end
 
-      fun mk_contract (((name, assuming), variables), ((((payable, constr_params), constr_memory), constr_body), methods)) thy =
+      fun mk_contract ((((name, parents), assuming), variables), ((((payable, constr_params), constr_memory), constr_body), methods)) thy =
         let
           fun change_types3 ctxt (((((name, (external, payable)), parlist), memlist), cdlist), body) =
             let
@@ -257,12 +273,32 @@ val _ = let
               (((((name, (external, payable)), parlist), memlist), cdlist), body)
             end;
 
-          val name_lc = decapitalizeFirst (Binding.name_of name);
+          val dname = Binding.name_of name;
+          val name_lc = decapitalizeFirst dname;
           val ctxt = Proof_Context.init_global thy; (*TODO: disjoined if needed*)
-          val variables = map (apply2 (Syntax.read_term ctxt)) variables;
+
+          (*Abstract methods have no body: they revert, and a contract that inherits them has to implement them.*)
+          val abstract_names =
+            map_filter (fn (((((n, _), _), _), _), body) => if Inh.plain body = "ABSTRACT" then SOME (Binding.name_of n) else NONE) methods;
+          val methods =
+            map (fn (t, body) => (t, if Inh.plain body = "ABSTRACT" then "do { assert Err (\<lambda>_. False); \<langle>skip\<rangle> }" else body)) methods;
+
+          val own_variables = map (apply2 (Syntax.read_term ctxt)) variables;
+          val own_params = map (apply2 Inh.plain) constr_params @ map (apply2 Inh.plain) constr_memory;
           val constr_params = map (apply2 (Syntax.read_term ctxt)) constr_params;
           val constr_memory = map (apply2 (Syntax.read_term ctxt)) constr_memory;
-          val methods = map (change_types3 ctxt) methods;
+          val own_methods = map (change_types3 ctxt) methods;
+
+          (*inherited state variables, constructor and methods*)
+          val inh =
+            Inh.prepare thy {dname = dname, name_lc = name_lc, parents = parents, abstract_names = abstract_names,
+              own_names = map (fn (((((n, _), _), _), _), _) => Binding.name_of n) own_methods,
+              ctor_arity = length constr_params + length constr_memory};
+          val variables = #base_members inh @ own_variables;
+          val own_body = Inh.plain constr_body;
+          val constr_body = Inh.constructor_body thy inh {own_params = own_params, own_body = own_body, body = constr_body};
+          val methods = #alias_methods inh @ own_methods;
+          val thy = Inh.register_instances inh thy;
 
           val mk_contract_datatype =
             let
@@ -309,7 +345,9 @@ val _ = let
               |> (fn ((c, ct, casex, _), thy') =>
                     create_locale (name, assuming, variables, payable,
                       constr_params, constr_memory, constr_body, methods, c, ct, casex, thy')
-              |> register name_lc c ct casex)
+              |> register name_lc c ct casex
+              |> Inh.note_const name_lc
+              |> Inh.register name_lc inh {own_params = own_params, own_body = own_body})
         end
 
       val parameter_parser = Parse.term -- (Parse.$$$ ":" |-- Parse.term);
@@ -320,10 +358,14 @@ val _ = let
       val body_parser = Parse.$$$ "where" |-- Parse.!!! Parse.term;
       val payable_parser = Scan.optional (Parse.$$$ "payable" >> K true) false;
       val external_parser = Scan.optional (Parse.$$$ "external" >> K true) false;
-      val method_parser = Parse.$$$ "cfunction" |-- (Parse.binding -- (external_parser -- payable_parser) -- parameter_list_parser -- memory_list_parser -- calldata_list_parser -- body_parser)
+      val method_body_parser = body_parser || (Parse.$$$ "abstract" >> K "ABSTRACT")
+      val method_parser = Parse.$$$ "cfunction" |-- (Parse.binding -- (external_parser -- payable_parser) -- parameter_list_parser -- memory_list_parser -- calldata_list_parser -- method_body_parser)
       val constructor_parser = Parse.$$$ "constructor" |-- (payable_parser -- parameter_list_parser -- memory_list_parser -- body_parser)
       val assuming_parser = Scan.option (Parse.$$$ "assuming" |-- Parse.!!! Parse.name);
-      val contract_parser = (Parse.binding -- assuming_parser -- storage_list_parser) -- (constructor_parser -- (Parse.list method_parser))
+      val parent_parser =
+        Scan.optional (Parse.$$$ "is" |-- Parse.!!!
+          (Parse.list1 (Parse.name -- Scan.optional (Parse.$$$ "(" |-- Parse.!!! (Parse.list Parse.term --| Parse.$$$ ")")) []))) [];
+      val contract_parser = (Parse.binding -- parent_parser -- assuming_parser -- storage_list_parser) -- (constructor_parser -- (Parse.list method_parser))
     in
       contract_parser >> mk_contract
     end
