@@ -25,6 +25,10 @@ session "Isabelle-Solidity" = "HOL-Library" +
     SimpleAuction
     Aliasing
     ArrayBuilder
+    Inheritance_Bank
+    Inheritance_Constructors
+    Inheritance_Abstract
+    Inheritance_Errors
   document_files
     "root.tex"
     "orcidlink.sty"
