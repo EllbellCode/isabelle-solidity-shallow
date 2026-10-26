@@ -16,7 +16,7 @@ structure Inh = Solidity_Inheritance
 val _ = let
   val specparser =
     let
-      fun create_locale (name, assuming, variables, payable, constr_params, constr_memory, constr_body, methods, cT, cterms, casex, thy) =
+      fun create_locale (name, assuming, variables, payable, constr_params, constr_memory, constr_body, methods, hook, cT, cterms, casex, thy) =
         let
           val internals = filter (fn x => not (fst (snd (fst (fst (fst (fst x))))))) methods
                         |> map (Binding.name_of o fst o fst o fst o fst o fst);
@@ -247,7 +247,7 @@ val _ = let
               [Element.Constrains [("external", mk_external_t name_ct)]] thy
         in
           thy |> mk_locale
-              |> (fn (lname, lthy) => mk_constructor lthy
+              |> (fn (lname, lthy) => mk_constructor (hook lthy)
               ||> mk_methods
               |> (fn (((con_trm, con_parlist, con_memlist, con_name, con_thm), (mono_name, mono_thm)), (ms, lthy')) => mk_partial_function (((con_trm, con_parlist @ con_memlist, con_thm), (mono_name, mono_thm)), (ms, lthy'))
               |> (fn ((pt, pthm, pinduct), lthy'') => Local_Theory.exit_global lthy''
@@ -298,7 +298,6 @@ val _ = let
           val own_body = Inh.plain constr_body;
           val constr_body = Inh.constructor_body thy inh {own_params = own_params, own_body = own_body, body = constr_body};
           val methods = #alias_methods inh @ own_methods;
-          val thy = Inh.register_instances inh thy;
 
           val mk_contract_datatype =
             let
@@ -344,7 +343,7 @@ val _ = let
               ||> Local_Theory.exit_global
               |> (fn ((c, ct, casex, _), thy') =>
                     create_locale (name, assuming, variables, payable,
-                      constr_params, constr_memory, constr_body, methods, c, ct, casex, thy')
+                      constr_params, constr_memory, constr_body, methods, Inh.register_instances inh, c, ct, casex, thy')
               |> register name_lc c ct casex
               |> Inh.note_const name_lc
               |> Inh.register name_lc inh {own_params = own_params, own_body = own_body})

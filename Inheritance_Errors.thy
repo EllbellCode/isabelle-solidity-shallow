@@ -58,7 +58,7 @@ ML \<open>
       NONE => () | SOME msg => error ("override of f was refused: " ^ msg));
 \<close>
 
-section \<open>A base that depends on the unspecified functions of the framework\<close>
+section \<open>A base that assumes a locale\<close>
 
 locale Callee = Keccak256 +
   assumes callee_ok: "ext_isc a \<Longrightarrow> \<exists>b. ext_result ep st bal a ''f()'' vs = Some (Bool b)"
@@ -75,9 +75,14 @@ where
   "\<langle>skip\<rangle>"
 
 ML \<open>
+  (*a derived contract has to assume what the base assumes*)
   val _ = expect_failure \<^theory>
-    "contract E7 is E6 assuming Callee constructor where \"\<langle>skip\<rangle>\" cfunction g external where \"\<langle>skip\<rangle>\""
-    "depends on the unspecified parameter";
+    "contract E7 is E6 constructor where \"\<langle>skip\<rangle>\" cfunction g external where \"\<langle>skip\<rangle>\""
+    "does not hold in this contract";
+  (*... and then it is accepted*)
+  val _ = (case failure \<^theory>
+    "contract E7 is E6 assuming Callee constructor where \"\<langle>skip\<rangle>\" cfunction g external where \"\<langle>skip\<rangle>\"" of
+      NONE => () | SOME msg => error ("a derived contract with the same assumption was refused: " ^ msg));
 \<close>
 
 section \<open>Memory parameters of a base constructor\<close>

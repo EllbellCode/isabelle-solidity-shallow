@@ -52,8 +52,10 @@ cfunction g abstract                        (* declared, not implemented *)
   `super_f` reaches the next definition after it in the linearisation of the contract at hand. Only internal methods can be reached
   (the transpiler uses an internal twin `f__int` of a public function).
 * **Abstract methods.** `cfunction f abstract` has no body (calling it reverts); a contract that inherits it should implement it.
-* **Facts.** `contract C` notes `C_const` (the contract's locale holds for a constant external function), needed to use the invariant rules
-  of a base from a derived contract: `wprules: base.invI[OF base_const]`.
+* **Facts.** A derived contract notes `<base>_const` for every base (the base's locale holds in the derived contract's locale for a
+  constant external function), needed to use the invariant rules of a base: `wprules: base.invI[OF base_const]`. This also works for
+  bases that hash (`keccak256` is a parameter of the locale, injective by assumption) and for bases with an `assuming` clause, provided
+  the derived contract assumes the same locale. (`contract C` itself notes a global `C_const` for the callee-free case.)
 
 ### Verification
 
@@ -69,12 +71,11 @@ cfunction g abstract                        (* declared, not implemented *)
 
 ### Limits
 
-A base whose locale depends on the unspecified functions of the framework (hashing, `ecrecover`, calls to other contracts, an
-`assuming` clause) cannot be inherited yet (error "depends on the unspecified parameter"); constructor memory parameters of a base are
+A derived contract that inherits from a base with an `assuming` clause has to assume the same locale (otherwise: "does not hold in this contract"); constructor memory parameters of a base are
 not supported. The facts `vcond` are also available by name: `vcond_constructor` and `vcond_<method>` (the numbers `vcond(i)` depend on the position of the method, hidden methods of super calls included).
 
 The implementation is in `Inheritance.ML`; examples and tests are in `Inheritance_Bank.thy`, `Inheritance_Constructors.thy` and
-`Inheritance_Abstract.thy`.
+`Inheritance_Abstract.thy`, `Inheritance_Callee.thy` (bases that hash or assume a locale), `Inheritance_Errors.thy` (what is refused).
 
 ## Prerequisites
 

@@ -22,6 +22,7 @@ sig
   val super_src: string -> string option
   val c3_lin: theory -> string list -> string list
   val pred_args: theory -> string -> string -> string
+  val local_instance: Proof.context -> string -> thm
   val plain: string -> string
 
   (* contract-time *)
@@ -36,7 +37,7 @@ sig
     {dname: string, name_lc: string, parents: (string * string list) list, abstract_names: string list, own_names: string list,
      ctor_arity: int} -> prepared
   val constructor_body: theory -> prepared -> {own_params: (string * string) list, own_body: string, body: string} -> string
-  val register_instances: prepared -> theory -> theory
+  val register_instances: prepared -> local_theory -> local_theory
   val register: string -> prepared -> {own_params: (string * string) list, own_body: string} -> theory -> theory
   val note_const: string -> theory -> theory
 
@@ -154,7 +155,52 @@ fun plain s =
   XML.content_of (YXML.parse_body s)
   |> String.explode |> map (fn c => if c = #"\n" then #" " else c) |> filter Char.isPrint |> String.implode
 
-(* the unconditional instance of a contract's locale: the locale predicate for a constant external function *)
+(* The arguments of the locale predicate of a contract in the context of a derived contract (the parameters are fixed there under the same
+   names), as a term string; the external function is replaced by `disp`. *)
+fun local_pred_args thy loc disp =
+  let
+    val (l, _) = Logic.dest_equals (Thm.prop_of (Global_Theory.get_thm thy (loc ^ "_def")))
+    fun arg (Var ((a, _), _)) = if a = "external" then disp else a
+      | arg _ = error "Unexpected locale predicate"
+  in space_implode " " (map arg (snd (strip_comb l))) end
+
+(* The instance of the locale of a base in the locale of a derived contract: the base's predicate for the parameters of the derived contract
+   and a constant external function, Z kw ts (\<lambda>_. X). The derived contract's own locale has everything the predicate asks for, except
+   that its assumption on the external function is one of the derived contract's: the constant function satisfies the assumption of the base.
+   The derived contract has to assume what the base assumes (the callee locale, if any). Works for bases that hash, call other contracts or
+   have an `assuming` clause, which have no instance for a constant environment. *)
+fun local_instance ctxt loc =
+  let
+    val thy = Proof_Context.theory_of ctxt
+    val def = Global_Theory.get_thm thy (loc ^ "_def")
+    val sol_gen = Global_Theory.get_thm thy "Contract.sol_gen"
+    val goal = Syntax.read_term ctxt (loc ^ " " ^ local_pred_args thy loc "(\<lambda>_. X)") |> Syntax.check_term ctxt |> HOLogic.mk_Trueprop
+    (*the method unfold_locales, as a tactic: it also uses the assumptions of the locale that the context belongs to*)
+    fun intro context =
+      Context_Tactic.NO_CONTEXT_TACTIC context
+        (Method.evaluate (Method.Source (Token.make_src ("unfold_locales", Position.none) [])) context [])
+      THEN ALLGOALS (Method.assm_tac context)
+    val sol_here =
+      Goal.prove ctxt [] [] (HOLogic.mk_Trueprop (Syntax.read_term ctxt "Solidity keccak256 timestamp external" |> Syntax.check_term ctxt))
+        (fn {context, ...} => intro context)
+    val sol_const = sol_gen OF [sol_here]
+    fun tac context =
+      Local_Defs.unfold_tac context [def]
+      THEN REPEAT (resolve_tac context [@{thm conjI}] 1)
+      THEN ALLGOALS (TRY o resolve_tac context [sol_const])          (*the part about the external function and the hash*)
+      THEN (fn st => if Thm.nprems_of st = 0 then Seq.single st else intro context st)   (*the callee locale, if the base has one*)
+    fun why () =
+      (case Seq.pull (tac ctxt (Goal.init (Thm.cterm_of ctxt goal))) of
+         SOME (st, _) => "unproved: " ^ Thm.string_of_thm ctxt st
+       | NONE => "no proof")
+  in
+    Goal.prove ctxt ["X"] [] goal (fn {context, ...} => tac context)
+      handle ERROR msg =>
+        error ("Inheritance: the locale of the base " ^ quote loc ^ " does not hold in this contract (a base's assumptions on the callee have to be assumed here too): "
+               ^ msg ^ "; " ^ why ())
+  end
+
+(* the unconditional instance of a contract's locale: the locale predicate for a constant environment (id for keccak256) *)
 fun const_instance ctxt thy loc =
   let
     val def = Global_Theory.get_thm thy (loc ^ "_def")
@@ -304,24 +350,29 @@ fun constructor_body thy ({parent_args, ancestors, ...}: prepared) {own_params =
     else "do { " ^ space_implode "; " parts ^ " }"
   end
 
-(* The unconditional definitions of the base methods behind the aliases, for the monotonicity proofs and the final tactic of `verification`:
-   a base's locale predicate holds for a constant external function, hence its definitions can be unfolded unconditionally. *)
-fun register_instances ({inherited_def, ...}: prepared) thy =
+(* The definitions of the base methods behind the aliases, unconditionally, for the monotonicity proofs and the final tactic of
+   `verification`: they hold in the locale of the derived contract (instance of each base's locale there). Also noted as <base>_const,
+   the instance for use with the invariant rules of the base (wprules: base.invI[OF base_const]). *)
+fun register_instances ({inherited_def, ...}: prepared) lthy =
   let
-    fun for_base z thy =
+    val thy = Proof_Context.theory_of lthy
+    fun for_base z lthy =
       let
         val zd = the (mlookupN thy z)
-        val ctxt = Proof_Context.init_global thy
-        val b_const = const_instance ctxt thy (#locale zd)
+        val inst = local_instance lthy (#locale zd)
         fun def_of (md: mdata) =
           (case head_of (fst (Logic.dest_equals (Thm.concl_of (#def md)))) of
              Const (c, _) => Global_Theory.get_thm thy (c ^ "_def")
            | _ => error "inherited method: unexpected definition")
         val unfoldings =
-          map (fn (m, _) => def_of (lookup_safe (#methods zd) (the_default m (super_src m))) OF [b_const])
+          map (fn (m, _) => def_of (lookup_safe (#methods zd) (the_default m (super_src m))) OF [inst])
             (filter (fn (_, z') => z' = z) inherited_def)
-      in Context.theory_map (fold (Named_Theorems.add_thm "Contract.alias_defs") unfoldings) thy end
-  in fold for_base (distinct (op =) (map snd inherited_def)) thy end
+      in
+        lthy
+        |> Local_Theory.note ((Binding.name (z ^ "_const"), []), [inst]) |> snd
+        |> Local_Theory.note ((Binding.name (z ^ "_unfoldings"), [Attrib.internal \<^here> (K (Named_Theorems.add "Contract.alias_defs"))]), unfoldings) |> snd
+      end
+  in fold for_base (distinct (op =) (map snd inherited_def)) lthy end
 
 (* the data a derived contract leaves for the contracts and verifications that build on it *)
 fun register name_lc ({parent_args, inherited_def, unimplemented, ...}: prepared) {own_params, own_body} thy =
@@ -424,7 +475,7 @@ fun discharge {lthy, pi, data, ct, vcond, vcond_thms, lems} inherited_defs impls
         val bext = bname ^ "_external"
         val be_def = Proof_Context.get_thm lthy (bext ^ "_def")
         val bax_def = Proof_Context.get_thm lthy (bext ^ "_axioms_def")
-        val b_const = const_instance lthy thy (#locale bd)
+        val b_const = local_instance lthy (#locale bd)
         val vcond_base = map (fn th => th OF [b_const]) (Proof_Context.get_thms lthy (#locale bd ^ ".vcond"))
         val case_rules =
           Proof_Context.get_thms lthy (fst (dest_Type (#dt_type bd)) ^ ".case") @ Proof_Context.get_thms lthy (fst (dest_Type ct) ^ ".case")
@@ -455,11 +506,11 @@ fun discharge {lthy, pi, data, ct, vcond, vcond_thms, lems} inherited_defs impls
                 val external_inv = Proof_Context.get_thm context "external_inv" OF [hyp_obj]
                 (* the base's external assumption for this contract's external function *)
                 val base_external_goal =
-                  Syntax.parse_term context (bext ^ " " ^ pred_args thy bext "(\<lambda>cb. external callx)")
+                  Syntax.parse_term context (bext ^ " " ^ local_pred_args thy bext "(\<lambda>cb. external callx)")
                   |> map_aterms (fn Free ("callx", _) => call_t | t => t)
                   |> Syntax.check_term context |> HOLogic.mk_Trueprop
                 val base_external =
-                  Goal.prove context ["ts"] [] base_external_goal
+                  Goal.prove context [] [] base_external_goal
                     (fn {context = c2, ...} =>
                        Local_Defs.unfold_tac c2 [be_def, bax_def]
                        THEN resolve_tac c2 [@{thm conjI}] 1

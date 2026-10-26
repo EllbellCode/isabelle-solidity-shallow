@@ -29,6 +29,7 @@ session "Isabelle-Solidity" = "HOL-Library" +
     Inheritance_Constructors
     Inheritance_Abstract
     Inheritance_Errors
+    Inheritance_Callee
   document_files
     "root.tex"
     "orcidlink.sty"

@@ -28,6 +28,10 @@ lemma sol_const: "Solidity id ts (\<lambda>_. X)"
   unfolding Solidity_def Keccak256_def External_def
   by (auto intro!: monotoneI sm_ordI meth_const)
 
+lemma sol_gen: "Solidity kw ts e \<Longrightarrow> Solidity kw ts (\<lambda>_. X)"
+  unfolding Solidity_def Keccak256_def External_def
+  by (auto intro!: monotoneI sm_ordI)
+
 lemma External_const: "External (\<lambda>_. X)"
   unfolding External_def by (auto intro!: monotoneI sm_ordI)
 
