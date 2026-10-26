@@ -80,4 +80,24 @@ ML \<open>
     "depends on the unspecified parameter";
 \<close>
 
+section \<open>Memory parameters of a base constructor\<close>
+
+contract E8
+  for "STR ''x''": "SType.TValue TSint"
+
+constructor
+  memory "STR ''m''": "SType.DArray (SType.TValue TSint)"
+where
+  "\<langle>skip\<rangle>"
+
+cfunction f external
+where
+  "\<langle>skip\<rangle>"
+
+ML \<open>
+  val _ = expect_failure \<^theory>
+    "contract E9 is E8 (\"\<langle>skip\<rangle>\") constructor where \"\<langle>skip\<rangle>\" cfunction g external where \"\<langle>skip\<rangle>\""
+    "memory parameters of a constructor are not";
+\<close>
+
 end

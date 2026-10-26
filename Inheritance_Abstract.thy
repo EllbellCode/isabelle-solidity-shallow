@@ -64,10 +64,10 @@ proof -
     unfolding inv_state_def icall_def
     apply vcg
     apply (rule_tac c=call and x=Reset_m and P'=tq in wp_post)
-    using vcond(2) apply simp apply blast
+    using vcond_reset apply simp apply blast
     apply vcg
     apply (rule_tac c=call and x=Reset_m and P'=tq in wp_post)
-    using vcond(2) apply simp apply blast
+    using vcond_reset apply simp apply blast
     apply vcg
     done
 qed
@@ -105,6 +105,32 @@ proof -
     unfolding reset_def
     apply (erule post_exc_true, erule_tac post_wp)
     by vcg
+qed
+
+text \<open>
+  A contract that does not implement the abstract method inherits it as it is (it reverts). Its obligation is the one of the base, which
+  is proved automatically; only the constructor is left to the user.
+\<close>
+
+contract Impl2 is Res
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+verification triv_i2:
+  res.triv
+  twice and
+  reset
+  for "Impl2"
+proof -
+  show "\<And>call.
+       (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow>
+       effect (constructor call) s r \<Longrightarrow> post s r (K (K (inv_state res.triv))) (K True)"
+    unfolding constructor_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: res.trivI[OF res_const] | auto)+
 qed
 
 end
