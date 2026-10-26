@@ -71,7 +71,7 @@ cfunction g abstract                        (* declared, not implemented *)
 
 A base whose locale depends on the unspecified functions of the framework (hashing, `ecrecover`, calls to other contracts, an
 `assuming` clause) cannot be inherited yet (error "depends on the unspecified parameter"); constructor memory parameters of a base are
-not supported; the `vcond` facts are numbered by method position (hidden methods included).
+not supported. The facts `vcond` are also available by name: `vcond_constructor` and `vcond_<method>` (the numbers `vcond(i)` depend on the position of the method, hidden methods of super calls included).
 
 The implementation is in `Inheritance.ML`; examples and tests are in `Inheritance_Bank.thy`, `Inheritance_Constructors.thy` and
 `Inheritance_Abstract.thy`.

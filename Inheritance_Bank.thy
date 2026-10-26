@@ -146,7 +146,7 @@ proof -
 
   (*the new condition of reset implies the condition of the base*)
   show "vcond bank4.Reset_m s r \<Longrightarrow> bank.vcond msg_sender this bank.Reset_m s r"
-    by (cases r) (auto simp add: vcond(5) bank.vcond(3)[OF bank_const] post_def reset_post2_def)
+    by (cases r) (auto simp add: vcond_reset bank.vcond_reset[OF bank_const] post_def reset_post2_def)
 qed
 
 subsection \<open>\<open>super\<close>\<close>
@@ -185,7 +185,7 @@ proof -
     unfolding inv_state_def icall_def
     apply vcg
     apply (rule_tac c=call and x=Super_reset_m and P'=reset_post in wp_post)
-    using vcond(4) apply simp apply blast
+    using vcond_super_reset apply simp apply blast
     apply vcg
     done
 qed

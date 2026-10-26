@@ -167,6 +167,10 @@ val _ = let
         tap (K (writeln "Generating vcond lemmas ..."))
         Local_Theory.begin_nested lthy |> snd
         |> Local_Theory.note ((@{binding vcond}, []), thm::thms)
+        (*the same facts by name: vcond_constructor, vcond_<method> (the numbers depend on the position of the method, hidden methods included)*)
+        |> (fn (r, lthy') =>
+              (r, fold (fn (n, th) => Local_Theory.note ((Binding.name ("vcond_" ^ n), []), [th]) #> snd)
+                       (("constructor", thm) :: (map fst (#methods data) ~~ thms)) lthy'))
         ||> `Local_Theory.end_nested
         |> export
       end;
