@@ -31,6 +31,7 @@ sig
   val change_transfers: typ -> term -> term -> term
   val change_internals: typ -> string list -> term list -> term -> term
   val change_externals: typ -> term -> term -> term
+  val change_internals_free: typ -> string list -> term list -> term -> term
   val mk_inv: term -> term -> term -> term
   val mk_inv_state: term -> term
   val mk_Bind: term -> term -> term
@@ -233,7 +234,19 @@ fun obtain terms name =
     if Option.isSome x then Option.valOf x else error ("aa")
   end
 
-fun mk_internal ct terms y = call ct $ instantiate_b_a2 (obtain terms (mk_dt_con_name y))
+(*
+  A reference to a method in a method body stands for the dispatcher applied to the method's constructor: "g" becomes
+  "call G_m". A method with parameters has a constructor that takes them, so "g" becomes "%x1 ... xn. call (G_m x1 ... xn)",
+  and an application "g a1 ... an" in the body then reads "call (G_m a1 ... an)" after beta-normalisation (see the use of
+  change_internals). For a method without parameters this is the same term as before.
+*)
+fun mk_internal ct terms y =
+  let
+    val c = instantiate_b_a2 (obtain terms (mk_dt_con_name y))
+    val vars = map_index (fn (i, T) => Free ("internal_arg" ^ string_of_int i, T)) (binder_types (fastype_of c))
+  in
+    fold_rev lambda vars (call ct $ list_comb (c, vars))
+  end
 
 fun change_internal ct names terms x =
   if is_Const x andalso Option.isSome (Long_Name.dest_local (fst (dest_Const x))) andalso
@@ -243,6 +256,16 @@ fun change_internal ct names terms x =
     x;
 
 fun change_internals ct names terms = Term.map_aterms (change_internal ct names terms);
+
+(*
+  The constructor is defined before the methods, so an internal method it calls is not yet a constant when the constructor body is
+  parsed: its name is read as an unknown variable. Replace such variables by the same term as for a method body (see mk_internal).
+*)
+fun change_internal_free ct names terms (x as Free (n, _)) =
+      if exists (fn n' => n' = n) names then mk_internal ct terms n else x
+  | change_internal_free _ _ _ x = x;
+
+fun change_internals_free ct names terms = Term.map_aterms (change_internal_free ct names terms);
 
 fun mk_inv r P Q = \<^Const>\<open>Contract.inv a for r P Q\<close>
 fun mk_inv_state i = \<^Const>\<open>Contract.inv_state a for this i\<close>

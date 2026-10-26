@@ -15,7 +15,7 @@ open Solidity_Data
 val _ = let
   val specparser =
     let
-      fun create_locale (name, variables, payable, constr_params, constr_memory, constr_body, methods, cT, cterms, casex, thy) =
+      fun create_locale (name, assuming, variables, payable, constr_params, constr_memory, constr_body, methods, cT, cterms, casex, thy) =
         let
           val internals = filter (fn x => not (fst (snd (fst (fst (fst (fst x))))))) methods
                         |> map (Binding.name_of o fst o fst o fst o fst o fst);
@@ -54,6 +54,8 @@ val _ = let
               val constr_body = Syntax.parse_term ctxt constr_body
                                 |> change_transfers name_ct (call name_ct)
                                 |> change_externals name_ct (call name_ct)
+                                |> change_internals_free name_ct internals cterms
+                                |> Envir.beta_norm
                                 |> Syntax.check_term ctxt
                                 |> change_types
                                 |> mk_inits mk_write constr_memory'
@@ -124,6 +126,7 @@ val _ = let
                                 |> change_transfers name_ct (call name_ct)
                                 |> change_externals name_ct (call name_ct)
                                 |> change_internals name_ct internals cterms
+                                |> Envir.beta_norm
                                 |> Syntax.check_term ctxt
                                 |> change_types
                                 |> (if external then mk_inits mk_cinit cdlist' else I)
@@ -219,7 +222,13 @@ val _ = let
   
           fun mk_locale thy =
             tap (K (writeln "Generating contract locale ..."))
-            Expression.add_locale (Binding.name name_lc) Binding.empty [] ([("Solidity.Solidity",(("",false), (Expression.Positional [],[])))],[]) [Element.Constrains [("external", mk_external_t name_ct)]] thy
+            Expression.add_locale (Binding.name name_lc) Binding.empty []
+              (("Solidity.Solidity",(("",false), (Expression.Positional [],[])))
+                 :: (case assuming of
+                       NONE => []
+                     | SOME loc => [(Locale.check (Proof_Context.init_global thy) (loc, Position.none), (("",false), (Expression.Positional [],[])))])
+              ,[])
+              [Element.Constrains [("external", mk_external_t name_ct)]] thy
         in
           thy |> mk_locale
               |> (fn (lname, lthy) => mk_constructor lthy
@@ -229,7 +238,7 @@ val _ = let
               |> (fn thy' => ((lname, con_trm, payable, con_parlist, con_memlist, con_name, con_thm, mono_name, mono_thm, ms, pt, pthm, pinduct, variables), thy')))))
         end
 
-      fun mk_contract ((name, variables), ((((payable, constr_params), constr_memory), constr_body), methods)) thy =
+      fun mk_contract (((name, assuming), variables), ((((payable, constr_params), constr_memory), constr_body), methods)) thy =
         let
           fun change_types3 ctxt (((((name, (external, payable)), parlist), memlist), cdlist), body) =
             let
@@ -298,7 +307,7 @@ val _ = let
               |> mk_contract_datatype
               ||> Local_Theory.exit_global
               |> (fn ((c, ct, casex, _), thy') =>
-                    create_locale (name, variables, payable,
+                    create_locale (name, assuming, variables, payable,
                       constr_params, constr_memory, constr_body, methods, c, ct, casex, thy')
               |> register name_lc c ct casex)
         end
@@ -313,7 +322,8 @@ val _ = let
       val external_parser = Scan.optional (Parse.$$$ "external" >> K true) false;
       val method_parser = Parse.$$$ "cfunction" |-- (Parse.binding -- (external_parser -- payable_parser) -- parameter_list_parser -- memory_list_parser -- calldata_list_parser -- body_parser)
       val constructor_parser = Parse.$$$ "constructor" |-- (payable_parser -- parameter_list_parser -- memory_list_parser -- body_parser)
-      val contract_parser = (Parse.binding -- storage_list_parser) -- (constructor_parser -- (Parse.list method_parser))
+      val assuming_parser = Scan.option (Parse.$$$ "assuming" |-- Parse.!!! Parse.name);
+      val contract_parser = (Parse.binding -- assuming_parser -- storage_list_parser) -- (constructor_parser -- (Parse.list method_parser))
     in
       contract_parser >> mk_contract
     end
