@@ -36,9 +36,9 @@ sig
   val prepare: theory ->
     {dname: string, name_lc: string, parents: (string * string list) list, abstract_names: string list, own_names: string list,
      ctor_arity: int} -> prepared
-  val constructor_body: theory -> prepared -> {own_params: (string * string) list, own_init: string, own_body: string, body: string} -> string
+  val constructor_body: theory -> prepared -> {own_params: (string * string) list, own_init: string, own_repl: (string * string) list, own_body: string, body: string} -> string
   val register_instances: prepared -> local_theory -> local_theory
-  val register: string -> prepared -> {own_params: (string * string) list, own_init: string, own_body: string} -> theory -> theory
+  val register: string -> prepared -> {own_params: (string * string) list, own_init: string, own_repl: (string * string) list, own_body: string} -> theory -> theory
   val note_const: string -> theory -> theory
 
   (* verification-time *)
@@ -89,6 +89,15 @@ structure CtorN = Theory_Data
 structure InitN = Theory_Data
 (
   type T = string Symtab.table
+  val empty = Symtab.empty
+  val merge = Symtab.merge (K true)
+)
+
+(* contract |-> bodies it gives to the constructors of its ancestors (ancestor, text): a constructor that uses a modifier which this contract
+   overrides runs with the new modifier *)
+structure ReplN = Theory_Data
+(
+  type T = (string * string) list Symtab.table
   val empty = Symtab.empty
   val merge = Symtab.merge (K true)
 )
@@ -335,19 +344,26 @@ fun prepare thy {dname, name_lc, parents, abstract_names, own_names, ctor_arity}
    A contract may have an `initialiser` (the state variable initialisers of the legacy pipeline of solc): the initialisers of all the
    contracts of the hierarchy run first, the most base-like first, then the arguments of the base constructors are evaluated, then the
    constructors run as above. Without an initialiser anywhere the sequence is the one above. (The via-IR pipeline runs a class at a time:
-   its initialisers belong to the body of its constructor.) *)
-fun constructor_body thy ({parent_args, ancestors, ...}: prepared) {own_params = _, own_init, own_body, body} =
+   its initialisers belong to the body of its constructor.)
+
+   A constructor that uses a modifier which a derived contract overrides runs with the new modifier (Solidity resolves modifiers
+   virtually, constructors' included): the derived contract gives the body for it (`replacing B "..."` in its constructor). *)
+fun constructor_body thy ({parent_args, ancestors, ...}: prepared) {own_params = _, own_init, own_repl, own_body, body} =
   let
     fun given r = (case r of SOME [] => NONE | _ => r)
     fun ctor_args x =
       (case given (AList.lookup (op =) parent_args x) of
          SOME a => SOME a
        | NONE => get_first (fn y => (case clookupN thy y of SOME (_, _, ps) => given (AList.lookup (op =) ps x) | NONE => NONE)) ancestors)
+    (*the body a class gives to the constructor of x: the most derived class that gives one (this contract first, then its ancestors, the
+      nearest first); otherwise the one x registered*)
+    fun replaced x = get_first (fn rs => AList.lookup (op =) rs x) (own_repl :: map (fn c => these (Symtab.lookup (ReplN.get thy) c)) ancestors)
     fun block x =
       (case clookupN thy x of
          NONE => ([], [])
        | SOME (params, ctor_body, _) =>
            let
+             val ctor_body = the_default ctor_body (replaced x)
              (* no class of the hierarchy gives the arguments: a base that is still abstract, their value is unspecified *)
              val args = the_default (map (K "undefined") params) (ctor_args x)
              val _ = if length params = length args then ()
@@ -359,6 +375,10 @@ fun constructor_body thy ({parent_args, ancestors, ...}: prepared) {own_params =
                "decl " ^ value_type ptype ^ " (" ^ pname ^ "); assign_stack_monad (" ^ pname ^ ") [] (" ^ arg ^ ")"
            in (map decl (params ~~ args), [ctor_body]) end)
     fun is_skip t = (plain t = "skip_monad" orelse plain t = "\<langle>skip\<rangle>")
+    val _ =
+      (case filter_out (member (op =) ancestors o fst) own_repl of
+         [] => ()
+       | (c, _) :: _ => error ("replacing the constructor of " ^ c ^ ", which is not a base of this contract"))
     val inits = filter_out is_skip (map_filter (Symtab.lookup (InitN.get thy)) (rev ancestors) @ [own_init])
     val parts =
       inits @ maps (fst o block) ancestors @ filter_out is_skip (maps (snd o block) (rev ancestors)) @ (if is_skip own_body then [] else [own_body])
@@ -393,10 +413,11 @@ fun register_instances ({inherited_def, ...}: prepared) lthy =
   in fold for_base (distinct (op =) (map snd inherited_def)) lthy end
 
 (* the data a derived contract leaves for the contracts and verifications that build on it *)
-fun register name_lc ({parent_args, inherited_def, unimplemented, ...}: prepared) {own_params, own_init, own_body} thy =
+fun register name_lc ({parent_args, inherited_def, unimplemented, ...}: prepared) {own_params, own_init, own_repl, own_body} thy =
   thy
   |> CtorN.map (Symtab.update (name_lc, (own_params, own_body, parent_args)))
   |> InitN.map (Symtab.update (name_lc, own_init))
+  |> ReplN.map (Symtab.update (name_lc, own_repl))
   |> AbstractN.map (Symtab.update (name_lc, unimplemented))
   |> (if null parent_args then I else InheritN.map (Symtab.update (name_lc, (map fst parent_args, inherited_def))))
 

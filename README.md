@@ -51,6 +51,10 @@ cfunction g abstract                        (* declared, not implemented *)
   bodies as above. An initialiser that reads what a base constructor writes sees the initial value, as in Solidity's default pipeline. Without
   an `initialiser` anywhere nothing changes: a class at a time, which is the order of the via-IR pipeline (put its initialisers in the body of
   the constructor). Example and test: `Inheritance_Constructors.thy`.
+* **Replacing the constructor of a base.** Solidity resolves the modifiers of a constructor virtually: if a derived contract overrides a modifier
+  that the constructor of a base uses, that constructor runs with the new modifier. The derived contract gives the body for it: in its
+  `constructor` (after the `initialiser`, before `where`) `replacing B "<body>"`; a contract derived from it takes the replacement too, unless it
+  replaces the body again. The parameters of B's constructor are bound as before. Test: `Inheritance_Constructors.thy`.
 * **Methods.** An inherited method is an alias of the base's method, applied to the dispatcher of the derived contract composed with an
   injection of the base's calls. Calls are therefore virtual: a call of `f` in a base reaches the override in the derived contract.
   The linearisation is Solidity's (C3, the right-most base is the most derived); a method defined in unrelated bases has to be overridden.

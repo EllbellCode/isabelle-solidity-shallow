@@ -187,4 +187,69 @@ ML \<open>
   val _ = check "IB: each part once" (forall (fn d => length (positions txt_b d "0123456789") = 1) ["100", "200", "300"]);
 \<close>
 
+section \<open>A derived contract replaces the constructor of a base\<close>
+
+text \<open>
+  Solidity resolves the modifiers of a constructor virtually: the constructor of a base that uses a modifier which a derived contract overrides
+  runs with the new modifier. The derived contract gives the body for it, \<open>replacing B "..."\<close>; a contract derived from it takes the replacement
+  too, unless it replaces the body again.
+\<close>
+
+abbreviation "vs \<equiv> STR ''s''"
+abbreviation "vk \<equiv> STR ''t''"
+
+contract RA
+  for vs: "SType.TValue TSint"
+
+constructor
+where
+  "vs [] ::=\<^sub>s \<langle>sint\<rangle> 7"
+
+cfunction ra external
+where
+  "\<langle>skip\<rangle>"
+
+contract RB is RA
+  for vk: "SType.TValue TSint"
+
+constructor
+replacing RA
+  "vs [] ::=\<^sub>s \<langle>sint\<rangle> 8"
+where
+  "vk [] ::=\<^sub>s \<langle>sint\<rangle> 9"
+
+cfunction rb external
+where
+  "\<langle>skip\<rangle>"
+
+contract RC is RB
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction rc external
+where
+  "\<langle>skip\<rangle>"
+
+contract RD is RC
+
+constructor
+replacing RA
+  "vs [] ::=\<^sub>s \<langle>sint\<rangle> 11"
+where
+  "\<langle>skip\<rangle>"
+
+cfunction rd external
+where
+  "\<langle>skip\<rangle>"
+
+ML \<open>
+  fun numbers txt = map (fn n => (n, length (positions txt ("\<langle>sint\<rangle> " ^ n) "0123456789"))) ["7", "8", "9", "11"];
+  val _ = check "RA keeps its own body" (numbers (definition_text \<^theory> "Inheritance_Constructors.rA.constructor_def") = [("7", 1), ("8", 0), ("9", 0), ("11", 0)]);
+  val _ = check "RB runs the replacement" (numbers (definition_text \<^theory> "Inheritance_Constructors.rB.constructor_def") = [("7", 0), ("8", 1), ("9", 1), ("11", 0)]);
+  val _ = check "RC takes RB's replacement" (numbers (definition_text \<^theory> "Inheritance_Constructors.rC.constructor_def") = [("7", 0), ("8", 1), ("9", 1), ("11", 0)]);
+  val _ = check "RD replaces it again" (numbers (definition_text \<^theory> "Inheritance_Constructors.rD.constructor_def") = [("7", 0), ("8", 0), ("9", 1), ("11", 1)]);
+\<close>
+
 end

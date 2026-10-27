@@ -3,6 +3,7 @@ theory Contract
   keywords "contract" :: thy_decl
        and "constructor"
        and "initialiser"
+       and "replacing"
        and "cfunction"
        and "external"
        and "memory"
