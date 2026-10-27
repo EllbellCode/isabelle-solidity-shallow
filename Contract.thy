@@ -2,6 +2,7 @@ theory Contract
   imports Solidity WP
   keywords "contract" :: thy_decl
        and "constructor"
+       and "initialiser"
        and "cfunction"
        and "external"
        and "memory"

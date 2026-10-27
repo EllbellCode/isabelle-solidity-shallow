@@ -36,9 +36,9 @@ sig
   val prepare: theory ->
     {dname: string, name_lc: string, parents: (string * string list) list, abstract_names: string list, own_names: string list,
      ctor_arity: int} -> prepared
-  val constructor_body: theory -> prepared -> {own_params: (string * string) list, own_body: string, body: string} -> string
+  val constructor_body: theory -> prepared -> {own_params: (string * string) list, own_init: string, own_body: string, body: string} -> string
   val register_instances: prepared -> local_theory -> local_theory
-  val register: string -> prepared -> {own_params: (string * string) list, own_body: string} -> theory -> theory
+  val register: string -> prepared -> {own_params: (string * string) list, own_init: string, own_body: string} -> theory -> theory
   val note_const: string -> theory -> theory
 
   (* verification-time *)
@@ -81,6 +81,14 @@ structure InheritN = Theory_Data
 structure CtorN = Theory_Data
 (
   type T = ((string * string) list * string * (string * string list) list) Symtab.table
+  val empty = Symtab.empty
+  val merge = Symtab.merge (K true)
+)
+
+(* contract |-> its initialiser (the text of the `initialiser` clause of its constructor, "skip_monad" if there is none) *)
+structure InitN = Theory_Data
+(
+  type T = string Symtab.table
   val empty = Symtab.empty
   val merge = Symtab.merge (K true)
 )
@@ -322,8 +330,13 @@ fun prepare thy {dname, name_lc, parents, abstract_names, own_names, ctor_arity}
 
 (* The constructor of a derived contract: the parameters of the constructors of all bases are bound first, the nearest base first (the
    arguments given for a base may use the parameters of a nearer one); then the bodies of the bases run, the most base-like first; then
-   the body of this contract. An empty body (the transpiler writes skip_monad) adds nothing to the sequence. *)
-fun constructor_body thy ({parent_args, ancestors, ...}: prepared) {own_params = _, own_body, body} =
+   the body of this contract. An empty body (the transpiler writes skip_monad) adds nothing to the sequence.
+
+   A contract may have an `initialiser` (the state variable initialisers of the legacy pipeline of solc): the initialisers of all the
+   contracts of the hierarchy run first, the most base-like first, then the arguments of the base constructors are evaluated, then the
+   constructors run as above. Without an initialiser anywhere the sequence is the one above. (The via-IR pipeline runs a class at a time:
+   its initialisers belong to the body of its constructor.) *)
+fun constructor_body thy ({parent_args, ancestors, ...}: prepared) {own_params = _, own_init, own_body, body} =
   let
     fun given r = (case r of SOME [] => NONE | _ => r)
     fun ctor_args x =
@@ -346,10 +359,11 @@ fun constructor_body thy ({parent_args, ancestors, ...}: prepared) {own_params =
                "decl " ^ value_type ptype ^ " (" ^ pname ^ "); assign_stack_monad (" ^ pname ^ ") [] (" ^ arg ^ ")"
            in (map decl (params ~~ args), [ctor_body]) end)
     fun is_skip t = (plain t = "skip_monad" orelse plain t = "\<langle>skip\<rangle>")
+    val inits = filter_out is_skip (map_filter (Symtab.lookup (InitN.get thy)) (rev ancestors) @ [own_init])
     val parts =
-      maps (fst o block) ancestors @ filter_out is_skip (maps (snd o block) (rev ancestors)) @ (if is_skip own_body then [] else [own_body])
+      inits @ maps (fst o block) ancestors @ filter_out is_skip (maps (snd o block) (rev ancestors)) @ (if is_skip own_body then [] else [own_body])
   in
-    if null ancestors then body
+    if null ancestors andalso null inits then body
     else if null parts then own_body
     else "do { " ^ space_implode "; " parts ^ " }"
   end
@@ -379,9 +393,10 @@ fun register_instances ({inherited_def, ...}: prepared) lthy =
   in fold for_base (distinct (op =) (map snd inherited_def)) lthy end
 
 (* the data a derived contract leaves for the contracts and verifications that build on it *)
-fun register name_lc ({parent_args, inherited_def, unimplemented, ...}: prepared) {own_params, own_body} thy =
+fun register name_lc ({parent_args, inherited_def, unimplemented, ...}: prepared) {own_params, own_init, own_body} thy =
   thy
   |> CtorN.map (Symtab.update (name_lc, (own_params, own_body, parent_args)))
+  |> InitN.map (Symtab.update (name_lc, own_init))
   |> AbstractN.map (Symtab.update (name_lc, unimplemented))
   |> (if null parent_args then I else InheritN.map (Symtab.update (name_lc, (map fst parent_args, inherited_def))))
 

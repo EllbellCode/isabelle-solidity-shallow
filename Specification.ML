@@ -254,7 +254,7 @@ val _ = let
               |> (fn thy' => ((lname, con_trm, payable, con_parlist, con_memlist, con_name, con_thm, mono_name, mono_thm, ms, pt, pthm, pinduct, variables), thy')))))
         end
 
-      fun mk_contract ((((name, parents), assuming), variables), ((((payable, constr_params), constr_memory), constr_body), methods)) thy =
+      fun mk_contract ((((name, parents), assuming), variables), (((((payable, constr_params), constr_memory), constr_init), constr_body), methods)) thy =
         let
           fun change_types3 ctxt (((((name, (external, payable)), parlist), memlist), cdlist), body) =
             let
@@ -296,7 +296,8 @@ val _ = let
               ctor_arity = length constr_params + length constr_memory};
           val variables = #base_members inh @ own_variables;
           val own_body = Inh.plain constr_body;
-          val constr_body = Inh.constructor_body thy inh {own_params = own_params, own_body = own_body, body = constr_body};
+          val own_init = Inh.plain constr_init;
+          val constr_body = Inh.constructor_body thy inh {own_params = own_params, own_init = own_init, own_body = own_body, body = constr_body};
           val methods = #alias_methods inh @ own_methods;
 
           val mk_contract_datatype =
@@ -346,7 +347,7 @@ val _ = let
                       constr_params, constr_memory, constr_body, methods, Inh.register_instances inh, c, ct, casex, thy')
               |> register name_lc c ct casex
               |> Inh.note_const name_lc
-              |> Inh.register name_lc inh {own_params = own_params, own_body = own_body})
+              |> Inh.register name_lc inh {own_params = own_params, own_init = own_init, own_body = own_body})
         end
 
       val parameter_parser = Parse.term -- (Parse.$$$ ":" |-- Parse.term);
@@ -359,7 +360,8 @@ val _ = let
       val external_parser = Scan.optional (Parse.$$$ "external" >> K true) false;
       val method_body_parser = body_parser || (Parse.$$$ "abstract" >> K "ABSTRACT")
       val method_parser = Parse.$$$ "cfunction" |-- (Parse.binding -- (external_parser -- payable_parser) -- parameter_list_parser -- memory_list_parser -- calldata_list_parser -- method_body_parser)
-      val constructor_parser = Parse.$$$ "constructor" |-- (payable_parser -- parameter_list_parser -- memory_list_parser -- body_parser)
+      val initialiser_parser = Scan.optional (Parse.$$$ "initialiser" |-- Parse.!!! Parse.term) "skip_monad";
+      val constructor_parser = Parse.$$$ "constructor" |-- (payable_parser -- parameter_list_parser -- memory_list_parser -- initialiser_parser -- body_parser)
       val assuming_parser = Scan.option (Parse.$$$ "assuming" |-- Parse.!!! Parse.name);
       val parent_parser =
         Scan.optional (Parse.$$$ "is" |-- Parse.!!!

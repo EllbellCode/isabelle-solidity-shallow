@@ -134,4 +134,57 @@ ML \<open>
   val _ = check "DBase, DL, DR, DD" (increasing (map hd digits));
 \<close>
 
+section \<open>Initialisers\<close>
+
+text \<open>
+  The legacy pipeline of solc runs the state variable initialisers of the whole hierarchy before the first constructor. A contract states
+  them as an \<open>initialiser\<close> of its constructor: the initialisers of all the contracts run first, the most base-like first, then the arguments
+  of the base constructors are evaluated, then the constructors run. (The via-IR pipeline runs a class at a time; its initialisers are
+  part of the body of the constructor.) An initialiser may read what a base constructor writes later: it sees the initial value.
+\<close>
+
+abbreviation "vp \<equiv> STR ''p''"
+abbreviation "vq \<equiv> STR ''q''"
+abbreviation "vr \<equiv> STR ''r''"
+
+contract IA
+  for vp: "SType.TValue TSint"
+  and vq: "SType.TValue TSint"
+
+constructor
+param "STR ''x''": "SType.TValue TSint"
+initialiser
+  "vq [] ::=\<^sub>s \<langle>sint\<rangle> 100"
+where
+  "vp [] ::=\<^sub>s stackLookup (STR ''x'') []"
+
+cfunction ia external
+where
+  "\<langle>skip\<rangle>"
+
+contract IB is IA ("\<langle>sint\<rangle> 5")
+  for vr: "SType.TValue TSint"
+
+constructor
+initialiser
+  "vr [] ::=\<^sub>s vp ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 200"
+where
+  "vq [] ::=\<^sub>s vq ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 300"
+
+cfunction ib external
+where
+  "\<langle>skip\<rangle>"
+
+ML \<open>
+  val txt_a = definition_text \<^theory> "Inheritance_Constructors.iA.constructor_def";
+  val _ = check "IA: its initialiser before its constructor body"
+    (increasing [first txt_a "100", first txt_a "stackLookup"]);
+
+  val txt_b = definition_text \<^theory> "Inheritance_Constructors.iB.constructor_def";
+  (*the initialisers (IA's, then IB's), then the argument for IA's parameter, then the bodies (IA's, then IB's)*)
+  val _ = check "IB: initialisers, argument, bodies"
+    (increasing [first txt_b "100", first txt_b "200", first txt_b "''x''", first txt_b "300"]);
+  val _ = check "IB: each part once" (forall (fn d => length (positions txt_b d "0123456789") = 1) ["100", "200", "300"]);
+\<close>
+
 end
