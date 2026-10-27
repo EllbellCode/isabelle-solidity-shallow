@@ -70,13 +70,20 @@ The methods are listed only to give them pairs; a method that is not listed is v
   implies `base.vcond` for the base's method), so that the base's proofs about calls of the method remain valid;
 * the user proves the constructor and the methods that are new or overridden.
 
+**An invariant of its own.** A derived contract can also verify an invariant that its base never verified (about its own state
+variables, say; a contract has one `verification`, so this is instead of the base's invariant). The obligations of the base cannot be
+reused then. For an inherited method `verification` tries the proof of a method that leaves the invariant alone (unfold the alias and
+the base's definition, weakest precondition, simplify the storage updates); what it proves is not shown as a goal. It does not prove
+methods that call other methods and methods that change what the invariant looks at: they stay goals, as do the constructor and the new
+and overridden methods (`Inheritance_Invariants.thy`).
+
 ### Limits
 
-A derived contract that inherits from a base with an `assuming` clause has to assume the same locale (otherwise: "does not hold in this contract"); constructor memory parameters of a base are
-not supported. The facts `vcond` are also available by name: `vcond_constructor` and `vcond_<method>` (the numbers `vcond(i)` depend on the position of the method, hidden methods of super calls included).
+A derived contract that inherits from a base with an `assuming` clause has to assume the same locale (otherwise: "does not hold in this contract"); memory parameters (arrays, structs) of a base constructor are
+not supported (strings and bytes are value parameters and work). The facts `vcond` are also available by name: `vcond_constructor` and `vcond_<method>` (the numbers `vcond(i)` depend on the position of the method, hidden methods of super calls included).
 
 The implementation is in `Inheritance.ML`; examples and tests are in `Inheritance_Bank.thy`, `Inheritance_Constructors.thy` and
-`Inheritance_Abstract.thy`, `Inheritance_Callee.thy` (bases that hash or assume a locale), `Inheritance_Errors.thy` (what is refused).
+`Inheritance_Abstract.thy`, `Inheritance_Callee.thy` (bases that hash or assume a locale), `Inheritance_Invariants.thy` (invariants of derived contracts), `Inheritance_Errors.thy` (what is refused).
 
 ## Prerequisites
 

@@ -46,6 +46,7 @@ sig
     (string * ((string * string) * string option) list) list ->
     (string * ((string * string) * string option) list) list * (string * string) list
   val read_invariant: Proof.context -> theory -> string -> typ -> string -> term
+  val verified_with: theory -> string -> term -> bool
   val record_pairs: string -> term -> (string * ((string * string) * string option) list) list -> theory -> theory
   val user_goals: (term * term list) list -> bool list -> (term * term list) list list list ->
     (term * term list) list list -> (term * term list) list list
@@ -53,6 +54,9 @@ sig
   val discharge:
     {lthy: Proof.context, pi: morphism, data: Solidity_Data.data, ct: typ, vcond: term, vcond_thms: thm list, lems: (term * term list) list list list} ->
     (string * string) list -> thm list -> thm list list option list
+  val frame_proofs:
+    {lthy: Proof.context, pi: morphism, data: Solidity_Data.data, lems: (term * term list) list list list} ->
+    (string * string) list -> thm list list option list
   val assemble: int -> (thm list -> thm list list option list) -> (term * term list) list list list -> thm list list -> thm list list
 end
 
@@ -436,6 +440,11 @@ fun read_invariant lthy thy name_lc tp text =
     else (case get_first (fn t => if unresolved t then NONE else SOME t) (map_filter qualified ancestors) of SOME t => t | NONE => inv)
   end
 
+(* did the contract (lower case name) have a verification of this invariant? Only then are the obligations of its methods available to the
+   contracts that inherit them. *)
+fun verified_with thy x invariant =
+  exists (fn (inv, _) => inv aconv invariant) (these (Symtab.lookup (VerifN.get thy) x))
+
 fun record_pairs name_lc invariant prepost =
   VerifN.map (Symtab.map_default (name_lc, []) (cons (invariant, prepost)))
 
@@ -546,6 +555,47 @@ fun discharge {lthy, pi, data, ct, vcond, vcond_thms, lems} inherited_defs impls
              | NONE => NONE))
       (#methods data) lems
   end
+
+(* An inherited method of a base that did not verify this invariant (a derived contract's own invariant, for instance on its own state
+   variables): the proof of a method that leaves the invariant alone is tried -- unfold the alias and the definition in the base, weakest
+   precondition, then simplify the updates of the storage. It succeeds when the method does not call other methods (their obligations
+   would need the pairs of those methods) and does not change what the invariant looks at. What it does not prove stays a goal for the user. *)
+fun frame_proofs {lthy, pi, data, lems} foreign_defs =
+  let
+    val thy = Proof_Context.theory_of lthy
+    val timeout = Time.fromSeconds 30
+    fun for_method (mname, md: mdata) groups =
+      (case AList.lookup (op =) foreign_defs mname of
+         NONE => NONE
+       | SOME bname =>
+           let
+             val bd = the (mlookupN thy bname)
+             val b_const = local_instance lthy (#locale bd)
+             val base_def = Global_Theory.get_thm thy (#locale bd ^ "." ^ mname ^ "_def") OF [b_const]
+             val alias_def = Morphism.thm pi (#def md)
+             val pnames = map (fst #> fst) (#parlist md @ #memlist md @ #cdlist md)
+             val get = Proof_Context.get_thm lthy
+             fun isar ctxt txt =
+               Context_Tactic.NO_CONTEXT_TACTIC ctxt (Method.evaluate (fst (Method.read_closure_input ctxt (Input.string txt))) ctxt [])
+             fun tac ctxt =
+               Local_Defs.unfold_tac ctxt [alias_def, base_def]
+               THEN eresolve_tac ctxt [get "post_exc_true"] 1
+               THEN eresolve_tac ctxt [get "post_wp"] 1
+               THEN Local_Defs.unfold_tac ctxt [get "inv_state_def"]
+               THEN Context_Tactic.NO_CONTEXT_TACTIC ctxt
+                      (Method.evaluate (Method.Source (Token.make_src ("vcg", Position.none) [])) ctxt [])
+               THEN isar ctxt "auto simp: storage_update_def"
+               THEN TRY (isar ctxt "drule sym, simp")
+             fun prove (group: (term * term list) list) =
+               (case Exn.capture (Timeout.apply timeout (fn () =>
+                   Goal.prove lthy ("s" :: "r" :: pnames) [] (fst (hd group)) (fn {context, ...} => tac context))) () of
+                  Exn.Res th => SOME th
+                | Exn.Exn exn => if Exn.is_interrupt exn then Exn.reraise exn else NONE)
+             val proofs = map prove groups
+           in
+             if forall is_some proofs then SOME (map (fn p => [the p]) proofs) else NONE
+           end)
+  in map2 (fn (m, md) => fn groups => for_method (m, md) groups) (#methods data) lems end
 
 (* All rules the final theorem needs, in the order of the facts: the constructor, then the groups of each method; those of the inherited
    methods come from `discharge_with` (it needs the implications of the overrides, the last `n_ovr` of the user's rules). *)
