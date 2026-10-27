@@ -59,7 +59,8 @@ cfunction g abstract                        (* declared, not implemented *)
 
 ### Verification
 
-`verification inv m1 and m2 ... for "D"` with the invariant `base.inv` of a base (`inv` alone is found in the locales of the bases):
+`verification inv [m1 (pre, post) and m2 ...] for "D"` with the invariant `base.inv` of a base (`inv` alone is found in the locales of the bases).
+The methods are listed only to give them pairs; a method that is not listed is verified like one that is listed without a pair:
 
 * the obligation of an *inherited* method is that of the base and is proved automatically (from the facts `<base>_external.<m>_vc` that the
   `verification` of the base leaves);

@@ -465,6 +465,8 @@ val _ = let
         fun go (name, prepost) =
           let
             val m = lookup_safe (#methods data) name;
+        (*a method that is not listed is verified without pairs of its own, as if it were listed without any*)
+        val prepost3 = prepost3 @ map (fn m => (m, [])) (filter_out (AList.defined (op =) prepost3) (map fst (#methods data)));
             val parlist = map (fst #> snd) (#parlist m @ #memlist m @ #cdlist m);
             val tp_pre = parlist ---> stateT --> \<^typ>\<open>bool\<close>;
             val tp_post = parlist ---> stateT --> rvalueT --> stateT --> \<^typ>\<open>bool\<close>;
@@ -503,10 +505,10 @@ val _ = let
       "initiates verification of invariant"
       (Parse.binding -- (Parse.$$$ ":"
         |-- ((Parse.term
-          -- (Parse.and_list
+          -- (Scan.optional (Parse.and_list
               (Parse.name
                 -- (Parse.list ((Parse.$$$ "(") |-- Parse.term --| (Parse.$$$ ",") -- Parse.term
-                      -- Scan.option ((Parse.$$$ ",") |-- Parse.term) --| (Parse.$$$ ")"))))))
+                      -- Scan.option ((Parse.$$$ ",") |-- Parse.term) --| (Parse.$$$ ")"))))) []))
           -- (Parse.$$$ "for" |-- Parse.string)))
         >> verify_invariant)
     end

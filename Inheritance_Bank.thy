@@ -65,16 +65,12 @@ where
 
 text \<open>
   \<open>deposit\<close>, \<open>withdraw\<close> and \<open>reset\<close> are inherited: their obligations (and the pair of \<open>reset\<close>) come from the
-  verification of \<open>Bank\<close>. Only the constructor and the new methods remain.
+  verification of \<open>Bank\<close>. Only the constructor and the new methods remain. The methods need not be listed: a method that is not
+  mentioned is verified like one that is listed without a pair of its own (a listed method is only needed to give it a pair).
 \<close>
 
 verification sum_bal_bank2:
   sum_bal  (*the invariant of Bank, found in the locale of the base; the others below write bank.sum_bal*)
-  deposit and
-  withdraw and
-  reset and
-  resetTwice and
-  noop
   for "Bank2"
 proof -
   show "\<And>call.
