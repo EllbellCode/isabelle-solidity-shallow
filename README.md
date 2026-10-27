@@ -81,11 +81,20 @@ The methods are listed only to give them pairs; a method that is not listed is v
 * the user proves the constructor and the methods that are new or overridden.
 
 **An invariant of its own.** A derived contract can also verify an invariant that its base never verified (about its own state
-variables, say; a contract has one `verification`, so this is instead of the base's invariant). The obligations of the base cannot be
+variables, say; this is a further `verification` of the derived contract, see below). The obligations of the base cannot be
 reused then. For an inherited method `verification` tries the proof of a method that leaves the invariant alone (unfold the alias and
-the base's definition, weakest precondition, simplify the storage updates); what it proves is not shown as a goal. It does not prove
+the base's definition, weakest precondition, simplify the storage updates; it succeeds for methods that do not update maps, for those with
+mapping updates the user proves the goal, as for the new methods); what it proves is not shown as a goal. It does not prove
 methods that call other methods and methods that change what the invariant looks at: they stay goals, as do the constructor and the new
 and overridden methods (`Inheritance_Invariants.thy`).
+
+**Several verifications of one contract.** A contract can verify several invariants, one `verification` each. The first keeps the names
+`vcond`, `vcond_<m>`, `<c>_external`; a further one adds `_<name of the verification>` to them (`vcond_owner_typed_v`). A derived contract that
+verifies an invariant which one of the verifications of its base verified reuses the proofs of that verification. A pair (`pre`, `post`, `rv`)
+may use the invariant of another verification as its precondition: the derived `ERC20` example (`gen_inherit/ERC20_Split_Gen.thy` in the
+transpiler repository) proves the postconditions and revert conditions of `mint` and `burn` for a precondition that is the invariant
+`owner_typed` of the derived contract, verified by a second `verification`. `invariant` and `verification` may be written in a later theory than
+the `contract` command.
 
 ### Limits
 

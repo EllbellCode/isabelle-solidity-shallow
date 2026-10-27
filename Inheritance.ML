@@ -47,12 +47,14 @@ sig
     (string * ((string * string) * string option) list) list * (string * string) list
   val read_invariant: Proof.context -> theory -> string -> typ -> string -> term
   val verified_with: theory -> string -> term -> bool
-  val record_pairs: string -> term -> (string * ((string * string) * string option) list) list -> theory -> theory
+  val suffix_of: theory -> string -> term -> string
+  val has_verification: theory -> string -> bool
+  val record_pairs: string -> term -> string -> (string * ((string * string) * string option) list) list -> theory -> theory
   val user_goals: (term * term list) list -> bool list -> (term * term list) list list list ->
     (term * term list) list list -> (term * term list) list list
-  val override_goals: Proof.context -> Solidity_Data.data -> term -> (string * string) list -> (term * term list) list list
+  val override_goals: Proof.context -> Solidity_Data.data -> term -> term -> (string * string) list -> (term * term list) list list
   val discharge:
-    {lthy: Proof.context, pi: morphism, data: Solidity_Data.data, ct: typ, vcond: term, vcond_thms: thm list, lems: (term * term list) list list list} ->
+    {lthy: Proof.context, pi: morphism, data: Solidity_Data.data, ct: typ, vcond: term, vcond_thms: thm list, invariant: term, lems: (term * term list) list list list} ->
     (string * string) list -> thm list -> thm list list option list
   val frame_proofs:
     {lthy: Proof.context, pi: morphism, data: Solidity_Data.data, lems: (term * term list) list list list} ->
@@ -115,6 +117,15 @@ structure AbstractN = Theory_Data
 structure VerifN = Theory_Data
 (
   type T = (term * (string * (((string * string) * string option) list)) list) list Symtab.table
+  val empty = Symtab.empty
+  val merge = Symtab.merge (K true)
+)
+
+(* contract |-> (invariant, suffix of the names of its verification): the first verification of a contract has the names vcond, <c>_external, ...;
+   a further one adds `_<name of the verification>` to them, so that a contract can verify several invariants *)
+structure SuffixN = Theory_Data
+(
+  type T = (term * string) list Symtab.table
   val empty = Symtab.empty
   val merge = Symtab.merge (K true)
 )
@@ -478,24 +489,30 @@ fun read_invariant lthy thy name_lc tp text =
 
 (* did the contract (lower case name) have a verification of this invariant? Only then are the obligations of its methods available to the
    contracts that inherit them. *)
+(* the suffix of the names of the verification of `invariant` in contract x *)
+fun suffix_of thy x invariant =
+  the_default "" (Option.map snd (find_first (fn (inv, _) => inv aconv invariant) (these (Symtab.lookup (SuffixN.get thy) x))))
+fun has_verification thy x = not (null (these (Symtab.lookup (VerifN.get thy) x)))
+
 fun verified_with thy x invariant =
   exists (fn (inv, _) => inv aconv invariant) (these (Symtab.lookup (VerifN.get thy) x))
 
-fun record_pairs name_lc invariant prepost =
+fun record_pairs name_lc invariant sfx prepost =
   VerifN.map (Symtab.map_default (name_lc, []) (cons (invariant, prepost)))
+  #> SuffixN.map (Symtab.map_default (name_lc, []) (cons (invariant, sfx)))
 
 (* The goals the user has to prove: the constructor, the methods that are not inherited, and the implication for each override. *)
 fun user_goals lem is_inh lems ovr_goals =
   lem :: flat (map2 (fn inhd => fn groups => if inhd then [] else groups) is_inh lems) @ ovr_goals
 
 (* For an override with its own pairs: this contract's condition for the method implies the condition of the base that defines it. *)
-fun override_goals lthy (data: data) vcond ovr =
+fun override_goals lthy (data: data) vcond invariant ovr =
   let
     val thy = Proof_Context.theory_of lthy
     fun goal (z, m) =
       let
         val zd = the (mlookupN thy z)
-        val vdef = Global_Theory.get_thm thy (#locale zd ^ ".vcond_def")
+        val vdef = Global_Theory.get_thm thy (z ^ ".vcond" ^ suffix_of thy z invariant ^ "_def")   (*by the short name: the verification of the base may be in a later theory than the contract*)
         val base_vcond = map_types Logic.unvarifyT_global (head_of (fst (Logic.dest_equals (Thm.concl_of vdef))))
         val msg_sender = Syntax.read_term lthy "msg_sender"
         val this = Syntax.read_term lthy "this"
@@ -510,18 +527,19 @@ fun override_goals lthy (data: data) vcond ovr =
 (* The obligations of an inherited method are discharged by those of the base that defines it (the facts <base>_external.<m>_vc): this
    contract's external function composed with the injection is the base's external function, and the hypothesis on the dispatcher is
    translated along the injection. `impls` are the proved implications of the overrides. *)
-fun discharge {lthy, pi, data, ct, vcond, vcond_thms, lems} inherited_defs impls =
+fun discharge {lthy, pi, data, ct, vcond, vcond_thms, invariant, lems} inherited_defs impls =
   let
     val thy = Proof_Context.theory_of lthy
     val vcond_thms = map (Morphism.thm pi) vcond_thms
     fun for_base bname (mname, md: mdata) groups =
       let
         val bd = the (mlookupN thy bname)
-        val bext = bname ^ "_external"
+        val bsfx = suffix_of thy bname invariant
+        val bext = bname ^ "_external" ^ bsfx
         val be_def = Proof_Context.get_thm lthy (bext ^ "_def")
         val bax_def = Proof_Context.get_thm lthy (bext ^ "_axioms_def")
         val b_const = local_instance lthy (#locale bd)
-        val vcond_base = map (fn th => th OF [b_const]) (Proof_Context.get_thms lthy (#locale bd ^ ".vcond"))
+        val vcond_base = map (fn th => th OF [b_const]) (Proof_Context.get_thms lthy (bname ^ ".vcond" ^ bsfx))
         val case_rules =
           Proof_Context.get_thms lthy (fst (dest_Type (#dt_type bd)) ^ ".case") @ Proof_Context.get_thms lthy (fst (dest_Type ct) ^ ".case")
         val pnames = map (fst #> fst) (#parlist md @ #memlist md @ #cdlist md)

@@ -64,6 +64,46 @@ proof -
     by (vcg wprules: count_valI | auto simp: storage_update_def | (drule sym, simp))+
 qed
 
+subsection \<open>Several verifications of one contract\<close>
+
+text \<open>
+  A contract can verify several invariants, one \<open>verification\<close> each. The first keeps the names \<open>vcond\<close>, \<open>vcond_<m>\<close>; a further one adds
+  \<open>_<name of the verification>\<close> to them (here \<open>vcond_count_any_v\<close>). A derived contract that verifies an invariant that one of the
+  verifications of its base verified reuses the proofs of that verification.
+\<close>
+
+invariant count_any ca where
+    "True"
+  for "Counter"
+
+verification count_any_v:
+  count_any
+  inc and
+  clear
+  for "Counter"
+proof -
+  show "\<And>call. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond_count_any_v x h r) \<Longrightarrow> effect (constructor call) s r \<Longrightarrow>
+        post s r (K (K (inv_state count_any))) (K True)"
+    unfolding constructor_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: count_anyI | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (inc call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond_count_any_v x h r) \<Longrightarrow> inv_state count_any s \<Longrightarrow>
+        post s r (K (K (inv_state count_any))) (K True)"
+    unfolding inc_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: count_anyI | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (clear call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond_count_any_v x h r) \<Longrightarrow> inv_state count_any s \<Longrightarrow>
+        post s r (K (K (inv_state count_any))) (K True)"
+    unfolding clear_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: count_anyI | auto simp: storage_update_def | (drule sym, simp))+
+qed
+
 subsection \<open>An invariant on the state of the derived contract\<close>
 
 text \<open>
@@ -106,6 +146,42 @@ proof -
     apply (auto simp: storage_update_def)
      apply (simp add: unat_word_ariths mod_less)
     apply (drule sym, simp)
+    done
+qed
+
+text \<open>
+  \<open>Twin\<close> verifies \<open>count_any\<close> too: \<open>inc\<close> and \<open>clear\<close> come from the second verification of \<open>Counter\<close> (the first one verified another invariant);
+  the constructor and the new method \<open>noop\<close> are left.
+\<close>
+
+contract Twin is Counter
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction noop external
+where
+  "\<langle>skip\<rangle>"
+
+verification twin_any:
+  counter.count_any
+  for "Twin"
+proof -
+  show "\<And>call. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> effect (constructor call) s r \<Longrightarrow>
+        post s r (K (K (inv_state counter.count_any))) (K True)"
+    unfolding constructor_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: counter.count_anyI[OF counter_const] | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (noop call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> inv_state counter.count_any s \<Longrightarrow>
+        post s r (K (K (inv_state counter.count_any))) (K True)"
+    unfolding noop_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    apply (vcg_all wprules: counter.count_anyI[OF counter_const] wperules: counter.count_anyE[OF counter_const])
+    apply (all \<open>(auto simp: storage_update_def)?\<close>)
     done
 qed
 

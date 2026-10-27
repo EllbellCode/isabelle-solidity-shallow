@@ -328,8 +328,11 @@ val mk_True2 =
       \<^Const>\<open>True\<close>
       [stateT])
 
+(*the datatype of a contract has the name of its locale (qualified by the theory that declares the contract, which need not be the current one)*)
 fun mk_contract_typ ctxt name_lc =
-  Type (mk_global_name ctxt name_lc, [a]);  
+  (case mlookupN (Proof_Context.theory_of ctxt) name_lc of
+     SOME d => Type (#locale d, [a])
+   | NONE => Type (mk_global_name ctxt name_lc, [a]));
 
 val post_t = \<^Const>\<open>Contract.post a\<close>
 

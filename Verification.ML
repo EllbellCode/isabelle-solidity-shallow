@@ -14,7 +14,7 @@ open Solidity_Data
 structure Inh = Solidity_Inheritance
 
 val _ = let
-    fun mk_vcond data ct prepost invs lthy =
+    fun mk_vcond sfx data ct prepost invs lthy =
       let
         (*Constructor*)
         val cdata = #constructor data;
@@ -66,7 +66,7 @@ val _ = let
         (*Methods*)
 
         val rhs = list_comb (case_t, constr::cases) $ x
-        val lhs = Free ("vcond", ct --> stateT --> rT --> @{typ bool}) $ x $ s $ r
+        val lhs = Free ("vcond" ^ sfx, ct --> stateT --> rT --> @{typ bool}) $ x $ s $ r
         val eq = Logic.mk_equals (lhs, rhs);
         fun export ((vcond_t, (vcond_name, vcond_def)), (lthy_new, lthy_old)) =
           let
@@ -84,7 +84,7 @@ val _ = let
         |> export
       end
 
-    fun mk_vcond_lemmas data vcond vcond_def prepost invs lthy =
+    fun mk_vcond_lemmas sfx data vcond vcond_def prepost invs lthy =
       let
         (*Constructor*)
         val cdata = #constructor data;
@@ -166,10 +166,10 @@ val _ = let
       in
         tap (K (writeln "Generating vcond lemmas ..."))
         Local_Theory.begin_nested lthy |> snd
-        |> Local_Theory.note ((@{binding vcond}, []), thm::thms)
+        |> Local_Theory.note ((Binding.name ("vcond" ^ sfx), []), thm::thms)
         (*the same facts by name: vcond_constructor, vcond_<method> (the numbers depend on the position of the method, hidden methods included)*)
         |> (fn (r, lthy') =>
-              (r, fold (fn (n, th) => Local_Theory.note ((Binding.name ("vcond_" ^ n), []), [th]) #> snd)
+              (r, fold (fn (n, th) => Local_Theory.note ((Binding.name ("vcond" ^ sfx ^ "_" ^ n), []), [th]) #> snd)
                        (("constructor", thm) :: (map fst (#methods data) ~~ thms)) lthy'))
         ||> `Local_Theory.end_nested
         |> export
@@ -218,7 +218,7 @@ val _ = let
         |> Local_Theory.note ((inv_name, []), [thm]) |> snd |> Local_Theory.exit
       end
 
-    fun mk_locale data name_lc vcond invs name_ct ct thy =
+    fun mk_locale sfx data name_lc vcond invs name_ct ct thy =
       let
         val inv = @{term Contract.inv};
         val invs' = lambda s' ((mk_inv_state invs) $ s');
@@ -244,7 +244,7 @@ val _ = let
                       , (mk_inv_state invs) $ s)
                     , inv $ r $ invs' $ invs')))))
 
-        val binding = Binding.name (name_lc ^ "_external");
+        val binding = Binding.name (name_lc ^ "_external" ^ sfx);
       in
         tap (K (writeln "Generating verification locale ..."))
         Expression.add_locale binding Binding.empty [] ([(#locale data,(("",true), (Expression.Positional [],[])))],[]) [Element.Assumes [((@{binding "external_inv"}, []), [(assumption, [])])]] thy
@@ -384,11 +384,11 @@ val _ = let
         val foreign_defs = filter_out (fn (m, _) => AList.defined (op =) inherited_defs m) (the_default [] all_inherited)
         val framed = Inh.frame_proofs {lthy = lthy, pi = pi, data = data, lems = lems} foreign_defs
         val is_inherited = map2 (fn (m, _) => fn f => AList.defined (op =) inherited_defs m orelse is_some f) (#methods data) framed
-        val ovr_goals = Inh.override_goals lthy data vcond ovr
+        val ovr_goals = Inh.override_goals lthy data vcond invs ovr
         val user_goals = Inh.user_goals lem is_inherited lems ovr_goals
         fun discharge_with impls =
           map2 (fn d => fn f => if is_some d then d else f)
-            (Inh.discharge {lthy = lthy, pi = pi, data = data, ct = ct, vcond = vcond, vcond_thms = vcond_thms, lems = lems} inherited_defs impls)
+            (Inh.discharge {lthy = lthy, pi = pi, data = data, ct = ct, vcond = vcond, vcond_thms = vcond_thms, invariant = invs, lems = lems} inherited_defs impls)
             framed
       in
         tap (K (writeln "Proving theorem"))
@@ -398,7 +398,7 @@ val _ = let
           user_goals lthy
       end;
 
-    fun mk_wp_rule vcond name_ct ct invs lthy =
+    fun mk_wp_rule sfx vcond name_ct ct invs lthy =
       let
         fun proof_tac {prems, context} =
           let
@@ -455,20 +455,21 @@ val _ = let
                 |> singleton (Proof_Context.export ctxt lthy);
       in
         tap (K (writeln "Generating wp rule ..."))
-        Local_Theory.note ((@{binding wp_external}, @{attributes [wprules]}), [thm]) lthy
+        Local_Theory.note ((Binding.name ("wp_external" ^ sfx), @{attributes [wprules]}), [thm]) lthy
       end
 
     fun verify_invariant (inv_name, ((invariant, prepost3:((string * ((string * string) * string option) list) list)), contract_name)) thy =
       let
         val name_lc = decapitalizeFirst contract_name;
-        val lthy = Named_Target.init [] (Context.theory_base_name thy ^ "." ^ name_lc) thy
+        val lthy = Named_Target.init [] (case mlookupN thy name_lc of SOME d => #locale d | NONE => error ("No contract " ^ quote contract_name)) thy
         val data = the (mlookupN (Proof_Context.theory_of lthy) name_lc);
         val tp = HOLogic.mk_prodT (\<^typ>\<open>String.literal\<close> --> \<^Type>\<open>storage_data \<^Type>\<open>valtype a\<close>\<close>, \<^typ>\<open>nat\<close>) --> \<^typ>\<open>bool\<close>
         val invariant = Inh.read_invariant lthy thy name_lc tp invariant;
         (*a method that is not listed is verified without pairs of its own, as if it were listed without any*)
         val prepost3 = prepost3 @ map (fn m => (m, [])) (filter_out (AList.defined (op =) prepost3) (map fst (#methods data)));
         val (prepost3, ovr) = Inh.pairs_and_overrides thy name_lc invariant prepost3;
-        val lthy = lthy |> Local_Theory.background_theory (Inh.record_pairs name_lc invariant prepost3);
+        val sfx = if Inh.has_verification thy name_lc then "_" ^ Binding.name_of inv_name else "";
+        val lthy = lthy |> Local_Theory.background_theory (Inh.record_pairs name_lc invariant sfx prepost3);
         fun go (name, prepost) =
           let
             val m = lookup_safe (#methods data) name;
@@ -498,12 +499,12 @@ val _ = let
         val all_inherited = Option.map snd (Inh.ilookupN thy name_lc);
         val inherited = Option.map (filter (fn (_, b) => Inh.verified_with thy b invariant)) all_inherited;
       in
-        lthy |> mk_vcond data ct prepost invariant
+        lthy |> mk_vcond sfx data ct prepost invariant
              |> (fn ((vcond, vcond_name, vcond_def), lthy')
-               => mk_vcond_lemmas data vcond vcond_def prepost invariant lthy'
+               => mk_vcond_lemmas sfx data vcond vcond_def prepost invariant lthy'
              ||> Local_Theory.exit_global
-             |> (fn ((name, thms), lthy'') => mk_locale data name_lc vcond invariant name_ct ct lthy''
-             |> (fn (lname, lthy''') => mk_wp_rule vcond name_ct ct invariant lthy'''
+             |> (fn ((name, thms), lthy'') => mk_locale sfx data name_lc vcond invariant name_ct ct lthy''
+             |> (fn (lname, lthy''') => mk_wp_rule sfx vcond name_ct ct invariant lthy'''
              |> (fn ((wp_name, wp_thm), lthy'''')
                => mk_proof data lname inv_name vcond thms name_ct ct prepost rvs invariant inherited all_inherited ovr lthy''''))))
       end

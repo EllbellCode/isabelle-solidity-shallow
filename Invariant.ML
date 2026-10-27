@@ -19,7 +19,7 @@ val _ = let
       fun mk_invariant (((name, var), inv), contract_name) thy =
         let
           val name_lc = decapitalizeFirst contract_name;
-          val lthy = Named_Target.init [] (Context.theory_base_name thy ^ "." ^ name_lc) thy
+          val lthy = Named_Target.init [] (case mlookupN thy name_lc of SOME d => #locale d | NONE => error ("No contract " ^ quote contract_name)) thy
           val var =
             let
               val tp = HOLogic.mk_prodT (\<^typ>\<open>String.literal\<close> --> \<^Type>\<open>storage_data \<^Type>\<open>valtype a\<close>\<close>, \<^typ>\<open>nat\<close>)
