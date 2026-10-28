@@ -291,4 +291,83 @@ proof -
     by (vcg wprules: tag_setI | auto simp: storage_update_def | (drule sym, simp))+
 qed
 
+subsection \<open>Overriding a method whose pair mentions \<open>msg_value\<close>\<close>
+
+text \<open>
+  The condition of a verification depends on the variables of the contract that the pairs mention, so its parameters are not always the same.
+  An override whose pair differs from the base's has to imply the base's: this goal is built with the parameters of the base's condition
+  (this test would fail if they were assumed to be \<open>msg_sender\<close> and \<open>this\<close>). The base's postcondition is about the final state only, the
+  override's relates the initial and the final state and says more.
+\<close>
+
+abbreviation "ovx \<equiv> STR ''x''"
+abbreviation "ovy \<equiv> STR ''y''"
+
+abbreviation "ovd \<equiv> STR ''done''"
+
+contract OvA
+  for ovx: "SType.TValue TSint"
+  and ovd: "SType.TValue TBool"
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction h external
+param "STR ''v''" : "SType.TValue TSint"
+where
+  "ovx [] ::=\<^sub>s stackLookup (STR ''v'') []"
+
+contract OvB is OvA
+  for ovy: "SType.TValue TSint"
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction h external
+param "STR ''v''" : "SType.TValue TSint"
+where
+  "do { ovx [] ::=\<^sub>s stackLookup (STR ''v'') []; ovy [] ::=\<^sub>s \<langle>sint\<rangle> 2 }"
+
+invariant ov_ok t where "True" for "OvA"
+
+abbreviation (in Solidity) ov_pre_g where "ov_pre_g _ \<equiv> True"
+abbreviation (in Solidity) ov_sp_g_a where "ov_sp_g_a s r s' \<equiv> state.Storage s' this STR ''x'' = storage_data.Value (Uint 1)"
+abbreviation (in Solidity) ov_sp_g_b where "ov_sp_g_b s r s' \<equiv> ov_sp_g_a s r s' \<and> state.Storage s' this STR ''y'' = storage_data.Value (Uint 2)"
+abbreviation (in Solidity) ov_rv_g where "ov_rv_g s \<equiv> False"
+abbreviation (in Solidity) ov_pre_h where "ov_pre_h _ _ \<equiv> True"
+abbreviation (in Solidity) ov_sp_h_a where "ov_sp_h_a v st rr st' \<equiv> state.Storage st' this STR ''x'' = storage_data.Value (Uint v)"
+abbreviation (in Solidity) ov_sp_h_b where "ov_sp_h_b v st rr st' \<equiv> ov_sp_h_a v st rr st' \<and> state.Storage st' this STR ''y'' = storage_data.Value (Uint 2)"
+abbreviation (in Solidity) ov_rv_h where "ov_rv_h v s \<equiv> msg_value < 0"
+
+verification ov_ok_a:
+  ov_ok
+  h (ov_pre_h, ov_sp_h_a, ov_rv_h)
+  for "OvA"
+  apply (all \<open>unfold constructor_def h_def\<close>)
+  apply (all \<open>(erule post_exc_const, erule_tac post_wp)\<close>)
+  apply (all \<open>unfold inv_state_def\<close>)
+  apply (all \<open>vcg_all wprules: ov_okI wperules: ov_okE\<close>)
+  apply (all \<open>(clarsimp simp: wpsimps dest!: wpdrules)?\<close>)
+  apply (all \<open>(vcg_all wprules: ov_okI wperules: ov_okE)?\<close>)
+  apply (all \<open>(clarsimp simp: wpsimps dest!: wpdrules)?\<close>)
+  apply (all \<open>(auto dest: sym simp: storage_update_def kdequals_def word_gt_0 unat_eq_zero not_less_zero)?\<close>)
+  done
+
+verification ov_ok_b:
+  ovA.ov_ok
+  h (ov_pre_h, ov_sp_h_b, ov_rv_h)
+  for "OvB"
+  apply -
+  apply (all \<open>(unfold constructor_def h_def)?\<close>)
+  apply (all \<open>(erule post_exc_const, erule_tac post_wp)?\<close>)
+  apply (all \<open>(unfold inv_state_def)?\<close>)
+  apply (all \<open>(vcg_all wprules: ovA.ov_okI[OF ovA_const] wperules: ovA.ov_okE[OF ovA_const])?\<close>)
+  apply (all \<open>(clarsimp simp: wpsimps dest!: wpdrules)?\<close>)
+  apply (all \<open>(vcg_all wprules: ovA.ov_okI[OF ovA_const] wperules: ovA.ov_okE[OF ovA_const])?\<close>)
+  apply (all \<open>(clarsimp simp: wpsimps dest!: wpdrules)?\<close>)
+  apply (all \<open>(auto dest: sym simp: storage_update_def kdequals_def word_gt_0 unat_eq_zero not_less_zero vcond_h ovA.vcond_h[OF ovA_const])?\<close>)
+  done
+
 end

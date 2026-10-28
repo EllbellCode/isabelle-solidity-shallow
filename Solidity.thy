@@ -798,6 +798,13 @@ lemma post_exc_false:
   by (metis (no_types, lifting) K.simps case_prod_beta case_sum_o_inj(2) result.case_eq_if result.disc(4)
       result.distinct_disc(5) surjective_sum)
 
+(*the exception part of a postcondition that is a constant Q (does not depend on the state): joins post_exc_true (Q = True) and post_exc_false (Q = False)*)
+lemma post_exc_const:
+  assumes "effect (exc x) s r"
+      and "\<And>r. effect x s r \<Longrightarrow> post s r I (K Q)"
+    shows "post s r I (K Q)"
+  using assms post_exc_true post_exc_false by (cases Q) auto
+
 (*
   reduce post to post2
 *)

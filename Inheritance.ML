@@ -545,13 +545,15 @@ fun override_goals lthy (data: data) vcond invariant ovr =
         val zd = the (mlookupN thy z)
         val vdef = Global_Theory.get_thm thy (z ^ ".vcond" ^ suffix_of thy z invariant ^ "_def")   (*by the short name: the verification of the base may be in a later theory than the contract*)
         val base_vcond = map_types Logic.unvarifyT_global (head_of (fst (Logic.dest_equals (Thm.concl_of vdef))))
-        val msg_sender = Syntax.read_term lthy "msg_sender"
-        val this = Syntax.read_term lthy "this"
+        (*the parameters of vcond are the locale variables its definition mentions (msg_sender and this, and msg_value or others if a pair uses them)*)
+        val vparams =
+          map (fn Free (n, _) => Syntax.read_term lthy n | Var ((n, _), _) => Syntax.read_term lthy n | _ => error "vcond: unexpected parameter")
+            (let val args = snd (strip_comb (fst (Logic.dest_equals (Thm.concl_of vdef)))) in take (length args - 3) args end)   (*without x, s, r*)
         val md = lookup_safe (#methods data) m
         val bmd = lookup_safe (#methods zd) m
         val frees = map (fst #> Free) (#parlist md @ #memlist md @ #cdlist md)
         val prem = HOLogic.mk_Trueprop (vcond $ list_comb (instantiate_b_a2 (#dt_const md), frees) $ s $ r)
-        val concl = HOLogic.mk_Trueprop (list_comb (base_vcond, [msg_sender, this, list_comb (instantiate_b_a2 (#dt_const bmd), frees), s, r]))
+        val concl = HOLogic.mk_Trueprop (list_comb (base_vcond, vparams @ [list_comb (instantiate_b_a2 (#dt_const bmd), frees), s, r]))
       in [(fold_rev Logic.all frees (Logic.mk_implies (prem, concl)), [])] end
   in map goal ovr end
 
