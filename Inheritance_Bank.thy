@@ -139,18 +139,20 @@ constructor
 where
   "\<langle>skip\<rangle>"
 
-cfunction reset
+cfunction withdraw external
 where
   "do {
-    balances [\<langle>sender\<rangle>] ::=\<^sub>s \<langle>sint\<rangle> 0;
-    \<langle>skip\<rangle>
+    bal :: TSint;
+    bal [] ::= balances ~\<^sub>s [\<langle>sender\<rangle>];
+    icall reset;
+    \<langle>transfer\<rangle> \<langle>sender\<rangle> (bal ~ [])
   }"
 
 verification sum_bal_bank3:
   bank.sum_bal
   deposit and
   withdraw and
-  reset
+  reset (true_pre, reset_post)
   for "Bank3"
 proof -
   show "\<And>call.
@@ -161,13 +163,55 @@ proof -
     unfolding inv_state_def
     by (vcg wprules: bank.sum_balI[OF bank_const] | auto)+
 
-  show "\<And>call. effect (reset call) s r \<Longrightarrow>
-       (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> True \<Longrightarrow> post s r reset_post (K True)"
-    unfolding reset_def
+  show
+    d: "\<And>call.
+      (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r)
+        \<Longrightarrow> effect (withdraw call) s r
+        \<Longrightarrow> inv_state bank.sum_bal s
+        \<Longrightarrow> post s r (K (K (inv_state bank.sum_bal))) (K True)"
+    unfolding withdraw_def
     apply (erule post_exc_true, erule_tac post_wp)
-    unfolding inv_state_def
-    apply vcg
-    by auto
+    unfolding inv_state_def icall_def
+    apply (case_tac "msg_sender = this")
+     apply (vcg wperules: bank.sum_balE[OF bank_const])
+     apply (rule_tac s = msg_sender in subst,assumption)
+     apply (vcg wperules: bank.sum_balE[OF bank_const])
+    (* Apply precondition for internal method call *)
+           apply (subgoal_tac "(\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r)")
+            apply (rule_tac c=call and x=Reset_m and P'=reset_post in wp_post)
+    using vcond_reset apply simp apply blast
+    (* End: Apply precondition for internal method call *)
+             apply (vcg wperules: bank.sum_balE[OF bank_const])
+             apply (rule_tac s=msg_sender in subst, assumption)
+             apply (vcg wperules: bank.sum_balE[OF bank_const])
+             apply (auto simp add:wpsimps)
+      apply (vcg wperules: bank.sum_balE[OF bank_const])
+         apply (auto simp add:wpsimps)
+      apply (rule bal_msg_sender, assumption)
+      apply (vcg wperules: bank.sum_balE[OF bank_const])
+         apply (rule_tac mp = mp' in bank.sum_balI[OF bank_const])
+          apply (auto simp add:wpsimps intro: sum_leq_this)
+       apply (vcg wperules: bank.sum_balE[OF bank_const])
+       apply (rule_tac mp = mpa in bank.sum_balI[OF bank_const])
+        apply (vcg wperules: bank.sum_balE[OF bank_const])
+    (* Apply precondition for internal method call *)
+        apply (subgoal_tac "(\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r)")
+         apply (rule_tac c=call and x=Reset_m and P'=reset_post in wp_post)
+    using vcond_reset apply simp apply blast
+    (* End: Apply precondition for internal method call *)
+          apply (vcg wperules: bank.sum_balE[OF bank_const])
+          apply (auto simp add:wpsimps)
+     apply (vcg wperules: bank.sum_balE[OF bank_const])
+        apply (auto simp add:wpsimps)
+     apply (rule bal_msg_sender, assumption)
+     apply (vcg wperules: bank.sum_balE[OF bank_const])
+        apply (rule_tac mp = mp' in bank.sum_balI[OF bank_const])
+         apply (auto simp add:wpsimps intro: sum_leq_sender)
+      defer
+      apply (vcg wperules: bank.sum_balE[OF bank_const])
+    apply (rule_tac mp = mpa in bank.sum_balI[OF bank_const])
+     apply (vcg wperules: bank.sum_balE[OF bank_const])
+    done
 qed
 
 subsection \<open>Overriding with a stronger postcondition\<close>
