@@ -2194,4 +2194,336 @@ ML \<open>
     "no definition of nothing";
 \<close>
 
+section \<open>Inheritance: executed constructors, super chains and special functions\<close>
+
+
+
+subsection \<open>Base-constructor arguments\<close>
+
+contract CA
+  for va: "SType.TValue TSint"
+
+constructor
+param "STR ''x''": "SType.TValue TSint"
+where
+  "va [] ::=\<^sub>s stackLookup (STR ''x'') []"
+
+cfunction fa external
+where
+  "\<langle>skip\<rangle>"
+
+contract CB is CA ("stackLookup (STR ''y'') []")
+  for vb: "SType.TValue TSint"
+
+constructor
+param "STR ''y''": "SType.TValue TSint"
+where
+  "vb [] ::=\<^sub>s va ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 1"
+
+contract CC is CB ("\<langle>sint\<rangle> 7")
+  for vc: "SType.TValue TSint"
+
+constructor
+where
+  "vc [] ::=\<^sub>s vb ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 1"
+
+cfunction fc external
+where
+  "\<langle>skip\<rangle>"
+
+context cC
+begin
+
+(*CC gives CB the argument 7, CB gives CA the argument y = 7: a = 7, b = 8, c = 9*)
+lemma ctor_args:
+  "effect (constructor call) s r \<Longrightarrow>
+   post s r (\<lambda>s r s'. state.Storage s' this va = storage_data.Value (Uint 7) \<and> state.Storage s' this vb = storage_data.Value (Uint 8)
+                      \<and> state.Storage s' this vc = storage_data.Value (Uint 9)) (K True)"
+  unfolding constructor_def
+  apply (erule post_exc_true, erule_tac post_wp)
+  by vcg_all
+
+end
+
+subsection \<open>Initialisers (legacy order)\<close>
+
+abbreviation "vp \<equiv> STR ''p''"
+abbreviation "vq \<equiv> STR ''q''"
+abbreviation "vr \<equiv> STR ''r''"
+
+contract IA
+  for vp: "SType.TValue TSint"
+  and vq: "SType.TValue TSint"
+
+constructor
+param "STR ''x''": "SType.TValue TSint"
+initialiser
+  "vq [] ::=\<^sub>s \<langle>sint\<rangle> 100"
+where
+  "vp [] ::=\<^sub>s stackLookup (STR ''x'') []"
+
+cfunction ia external
+where
+  "\<langle>skip\<rangle>"
+
+contract IB is IA ("\<langle>sint\<rangle> 5")
+  for vr: "SType.TValue TSint"
+
+constructor
+initialiser
+  "vr [] ::=\<^sub>s vp ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 200"
+where
+  "vq [] ::=\<^sub>s vq ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 300"
+
+cfunction ib external
+where
+  "\<langle>skip\<rangle>"
+
+context iB
+begin
+
+(*the initialiser of IB reads p before IA's constructor wrote it (legacy order): r = 0 + 200; q = 100 + 300; p = 5*)
+lemma init_order:
+  "effect (constructor call) s r \<Longrightarrow>
+   post s r (\<lambda>s r s'. state.Storage s' this vp = storage_data.Value (Uint 5) \<and> state.Storage s' this vq = storage_data.Value (Uint 400)
+                      \<and> state.Storage s' this vr = storage_data.Value (Uint 200)) (K True)"
+  unfolding constructor_def
+  apply (erule post_exc_true, erule_tac post_wp)
+  by vcg_all
+
+end
+
+subsection \<open>Replacing a base constructor\<close>
+
+abbreviation "vs \<equiv> STR ''s''"
+abbreviation "vk \<equiv> STR ''t''"
+
+contract RA
+  for vs: "SType.TValue TSint"
+
+constructor
+where
+  "vs [] ::=\<^sub>s \<langle>sint\<rangle> 7"
+
+cfunction ra external
+where
+  "\<langle>skip\<rangle>"
+
+contract RB is RA
+  for vk: "SType.TValue TSint"
+
+constructor
+replacing RA
+  "vs [] ::=\<^sub>s \<langle>sint\<rangle> 8"
+where
+  "vk [] ::=\<^sub>s \<langle>sint\<rangle> 9"
+
+cfunction rb external
+where
+  "\<langle>skip\<rangle>"
+
+contract RC is RB
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction rc external
+where
+  "\<langle>skip\<rangle>"
+
+contract RD is RC
+
+constructor
+replacing RA
+  "vs [] ::=\<^sub>s \<langle>sint\<rangle> 11"
+where
+  "\<langle>skip\<rangle>"
+
+cfunction rd external
+where
+  "\<langle>skip\<rangle>"
+
+context rA begin
+lemma ctor_a:
+  "effect (constructor call) s r \<Longrightarrow> post s r (\<lambda>s r s'. state.Storage s' this vs = storage_data.Value (Uint 7)) (K True)"
+  unfolding constructor_def
+  apply (erule post_exc_true, erule_tac post_wp)
+  by vcg_all
+end
+
+context rB begin
+lemma ctor_b:
+  "effect (constructor call) s r \<Longrightarrow>
+   post s r (\<lambda>s r s'. state.Storage s' this vs = storage_data.Value (Uint 8) \<and> state.Storage s' this vk = storage_data.Value (Uint 9)) (K True)"
+  unfolding constructor_def
+  apply (erule post_exc_true, erule_tac post_wp)
+  by vcg_all
+end
+
+context rC begin
+lemma ctor_c:
+  "effect (constructor call) s r \<Longrightarrow>
+   post s r (\<lambda>s r s'. state.Storage s' this vs = storage_data.Value (Uint 8) \<and> state.Storage s' this vk = storage_data.Value (Uint 9)) (K True)"
+  unfolding constructor_def
+  apply (erule post_exc_true, erule_tac post_wp)
+  by vcg_all
+end
+
+context rD begin
+lemma ctor_d:
+  "effect (constructor call) s r \<Longrightarrow>
+   post s r (\<lambda>s r s'. state.Storage s' this vs = storage_data.Value (Uint 11) \<and> state.Storage s' this vk = storage_data.Value (Uint 9)) (K True)"
+  unfolding constructor_def
+  apply (erule post_exc_true, erule_tac post_wp)
+  by vcg_all
+end
+
+subsection \<open>A chain of super calls\<close>
+
+abbreviation "vl \<equiv> STR ''log''"
+
+contract SA
+  for vl: "SType.TValue TSint"
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction f
+where
+  "vl [] ::=\<^sub>s vl ~\<^sub>s [] \<langle>*\<rangle> \<langle>sint\<rangle> 10 \<langle>+\<rangle> \<langle>sint\<rangle> 1" ,
+
+cfunction run external
+where
+  "icall f"
+
+contract SB is SA
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction f
+where
+  "do {
+    vl [] ::=\<^sub>s vl ~\<^sub>s [] \<langle>*\<rangle> \<langle>sint\<rangle> 10 \<langle>+\<rangle> \<langle>sint\<rangle> 2;
+    icall super_f
+  }"
+
+contract SC is SB
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction f
+where
+  "do {
+    vl [] ::=\<^sub>s vl ~\<^sub>s [] \<langle>*\<rangle> \<langle>sint\<rangle> 10 \<langle>+\<rangle> \<langle>sint\<rangle> 3;
+    icall super_f
+  }"
+
+context sC
+begin
+
+(*run (inherited from SA) reaches SC.f, which calls SB.f, which calls SA.f: the digits 3, 2, 1 in that order*)
+lemma super_chain:
+  "effect (run call) s r \<Longrightarrow> state.Storage s this vl = storage_data.Value (Uint 0) \<Longrightarrow>
+   post s r (\<lambda>s r s'. state.Storage s' this vl = storage_data.Value (Uint 321)) (K True)"
+  unfolding run_def sA.run_def[OF sA_const] icall_def
+  apply (erule post_exc_true, erule_tac post_wp)
+  apply vcg
+  apply (simp add: call.simps f_def super_f_def sB_super_f_def sA.f_def[OF sA_const] sB.f_def[OF sB_const])
+  apply vcg_all
+  apply (all \<open>(clarsimp simp: wpsimps dest!: wpdrules)?\<close>)
+  apply (all \<open>(vcg_all)?\<close>)
+  apply (all \<open>(clarsimp simp: wpsimps dest!: wpdrules)?\<close>)
+  apply (all \<open>(vcg_all)?\<close>)
+  apply (all \<open>(auto dest: sym simp: storage_update_def)?\<close>)
+  done
+
+end
+
+subsection \<open>Inherited and overridden fallback\<close>
+
+abbreviation "vh \<equiv> STR ''hits''"
+abbreviation "vx \<equiv> STR ''extra''"
+
+contract FbBase
+  for vh: "SType.TValue TSint"
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction fallback external payable
+where
+  "vh [] ::=\<^sub>s vh ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 1"
+
+contract FbKeep is FbBase
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction bump external
+where
+  "\<langle>skip\<rangle>"
+
+contract FbOver is FbBase
+  for vx: "SType.TValue TSint"
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction fallback external payable
+where
+  "do {
+    vh [] ::=\<^sub>s vh ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 10;
+    vx [] ::=\<^sub>s vx ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 1
+  }"
+
+context fbKeep
+begin
+
+(*FbKeep inherits the fallback of FbBase*)
+lemma inherited_fallback:
+  "effect (fallback call) s r \<Longrightarrow> state.Storage s this vh = storage_data.Value (Uint 4) \<Longrightarrow>
+   post s r (\<lambda>s r s'. state.Storage s' this vh = storage_data.Value (Uint 5)) (K True)"
+  unfolding fallback_def fbBase.fallback_def[OF fbBase_const]
+  apply (erule post_exc_true, erule_tac post_wp)
+  apply vcg_all
+  apply (all \<open>(clarsimp simp: wpsimps dest!: wpdrules)?\<close>)
+  apply (all \<open>(vcg_all)?\<close>)
+  apply (all \<open>(auto dest: sym simp: storage_update_def)?\<close>)
+  done
+
+end
+
+context fbOver
+begin
+
+(*FbOver overrides it*)
+lemma overridden_fallback:
+  "effect (fallback call) s r \<Longrightarrow> state.Storage s this vh = storage_data.Value (Uint 4) \<Longrightarrow> state.Storage s this vx = storage_data.Value (Uint 0) \<Longrightarrow>
+   post s r (\<lambda>s r s'. state.Storage s' this vh = storage_data.Value (Uint 14) \<and> state.Storage s' this vx = storage_data.Value (Uint 1)) (K True)"
+  unfolding fallback_def
+  apply (erule post_exc_true, erule_tac post_wp)
+  apply vcg_all
+  apply (all \<open>(clarsimp simp: wpsimps dest!: wpdrules)?\<close>)
+  apply (all \<open>(vcg_all)?\<close>)
+  apply (all \<open>(auto dest: sym simp: storage_update_def)?\<close>)
+  done
+
+end
+
+ML \<open>
+  (*a base that was never declared*)
+  val _ = expect_failure \<^theory>
+    "contract UtU is NoSuchBase constructor where \"\<langle>skip\<rangle>\" cfunction uu external where \"\<langle>skip\<rangle>\""
+    "unknown base contract";
+\<close>
+
 end
