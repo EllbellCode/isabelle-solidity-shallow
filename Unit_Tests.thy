@@ -2111,4 +2111,87 @@ lemma dispatch_reaches_override:
 
 end
 
+section \<open>Inheritance: explicit base calls\<close>
+
+
+
+contract EbA
+  for vv: "SType.TValue TSint"
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction f
+where
+  "vv [] ::=\<^sub>s \<langle>sint\<rangle> 1" ,
+
+cfunction callA external
+where
+  "icall f"
+
+contract EbB is EbA
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction f
+where
+  "do { icall base__ebA__f; vv [] ::=\<^sub>s vv ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 10 }"
+
+contract EbC is EbB
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction viaA external
+where
+  "icall base__ebA__f" ,
+
+cfunction viaB external
+where
+  "icall base__ebB__f"
+
+context ebC
+begin
+
+lemma via_A:
+  "effect (viaA call) s r \<Longrightarrow>
+   post s r (\<lambda>s r s'. state.Storage s' this vv = storage_data.Value (Uint 1)) (K True)"
+  unfolding viaA_def icall_def
+  apply (erule post_exc_true, erule_tac post_wp)
+  apply vcg
+  apply (simp add: call.simps base__ebA__f_def ebA.f_def[OF ebA_const])
+  apply vcg_all
+  done
+
+(*B.f() runs B's own f, whose body calls A.f(): 1, then + 10*)
+lemma via_B:
+  "effect (viaB call) s r \<Longrightarrow>
+   post s r (\<lambda>s r s'. state.Storage s' this vv = storage_data.Value (Uint 11)) (K True)"
+  unfolding viaB_def icall_def
+  apply (erule post_exc_true, erule_tac post_wp)
+  apply vcg
+  apply (simp add: call.simps base__ebB__f_def base__ebA__f_def ebB.f_def[OF ebB_const] ebA.f_def[OF ebA_const])
+  apply vcg_all
+  done
+
+end
+
+(*the negative cases*)
+ML \<open>
+  val thy = \<^theory>;
+  val _ = expect_failure thy
+    "contract EbZ constructor where \"\<langle>skip\<rangle>\" cfunction z external where \"icall base__ebA__f\""
+    "not a base of this contract";
+  val _ = expect_failure thy
+    "contract EbY is EbA constructor where \"\<langle>skip\<rangle>\" cfunction y external where \"icall base__ebA__callA\""
+    "is an external function";
+  val _ = expect_failure thy
+    "contract EbX is EbA constructor where \"\<langle>skip\<rangle>\" cfunction x external where \"icall base__ebA__nothing\""
+    "no definition of nothing";
+\<close>
+
 end

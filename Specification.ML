@@ -293,7 +293,8 @@ val _ = let
           val inh =
             Inh.prepare thy {dname = dname, name_lc = name_lc, parents = parents, abstract_names = abstract_names,
               own_names = map (fn (((((n, _), _), _), _), _) => Binding.name_of n) own_methods,
-              ctor_arity = length constr_params + length constr_memory};
+              ctor_arity = length constr_params + length constr_memory,
+              texts = map (Inh.plain o snd) methods @ map Inh.plain [constr_body, constr_init] @ map (Inh.plain o snd) constr_repl};
           val variables = #base_members inh @ own_variables;
           val own_body = Inh.plain constr_body;
           val own_init = Inh.plain constr_init;

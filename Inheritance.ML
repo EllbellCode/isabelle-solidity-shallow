@@ -20,6 +20,7 @@ sig
 
   (* names *)
   val super_src: string -> string option
+  val scan_base_calls: string -> string list
   val c3_lin: theory -> string list -> string list
   val pred_args: theory -> string -> string -> string
   val local_instance: Proof.context -> string -> thm
@@ -35,7 +36,7 @@ sig
      alias_methods: ((((((binding * (bool * bool)) * ((term * term) list)) * ((term * term) list)) * ((term * term) list)) * string)) list}
   val prepare: theory ->
     {dname: string, name_lc: string, parents: (string * string list) list, abstract_names: string list, own_names: string list,
-     ctor_arity: int} -> prepared
+     ctor_arity: int, texts: string list} -> prepared
   val constructor_body: theory -> prepared -> {own_params: (string * string) list, own_init: string, own_repl: (string * string) list, own_body: string, body: string} -> string
   val register_instances: prepared -> local_theory -> local_theory
   val register: string -> prepared -> {own_params: (string * string) list, own_init: string, own_repl: (string * string) list, own_body: string} -> theory -> theory
@@ -144,12 +145,26 @@ fun own_methods_of thy c =
 
 (** names **)
 
-(* A hidden method `super_m` (`<x>_super_m` for a base x) runs the definition of m in the next base: the name it stands for *)
+(* A hidden method `super_m` (`<x>_super_m` for a base x) runs the definition of m in the next base: the name it stands for.
+   A hidden method `base__<a>__m` (the explicit call `A.m()`) runs the definition of m that A has, i.e. the first in the linearisation of
+   a; the name it stands for is m. *)
+fun base_call n =
+  if String.isPrefix "base__" n then
+    let val (pre, post) = Substring.position "__" (Substring.full (String.extract (n, 6, NONE)))
+    in if Substring.isEmpty post then NONE else SOME (Substring.string pre, Substring.string (Substring.triml 2 post)) end
+  else NONE
+
 fun super_src n =
-  if String.isPrefix "super_" n then SOME (String.extract (n, 6, NONE))
+  if String.isPrefix "base__" n then Option.map snd (base_call n)
+  else if String.isPrefix "super_" n then SOME (String.extract (n, 6, NONE))
   else
     (case Substring.position "_super_" (Substring.full n) of
        (_, post) => if Substring.isEmpty post then NONE else SOME (Substring.string (Substring.triml 7 post)))
+
+(*the hidden methods of explicit base calls that a text mentions*)
+fun scan_base_calls text =
+  let fun idchar c = Char.isAlphaNum c orelse c = #"_" orelse c = #"'"
+  in filter (String.isPrefix "base__") (String.tokens (not o idchar) text) end
 
 (* C3 linearisation, as Solidity does it: the bases of a contract are listed from the most base-like to the most derived, so the list
    is reversed; the result starts with the most derived contract *)
@@ -253,7 +268,7 @@ type prepared =
    unimplemented: string list,
    alias_methods: ((((((binding * (bool * bool)) * ((term * term) list)) * ((term * term) list)) * ((term * term) list)) * string)) list}
 
-fun prepare thy {dname, name_lc, parents, abstract_names, own_names, ctor_arity} : prepared =
+fun prepare thy {dname, name_lc, parents, abstract_names, own_names, ctor_arity, texts} : prepared =
   let
     val parent_args = map (fn (p, args) => (decapitalizeFirst p, map plain args)) parents
     val parent_names = map fst parent_args
@@ -305,7 +320,23 @@ fun prepare thy {dname, name_lc, parents, abstract_names, own_names, ctor_arity}
                   [] => NONE
                 | y :: _ => SOME (x ^ "_" ^ h, y)) end) hidden
         end) ancestors
-    val inherited_def = inherited @ inherited_hidden @ own_hidden
+    (* Explicit base calls `A.m()`: the hidden method base__a__m runs the definition of m that A has (the first concrete one in the
+       linearisation of A). It exists in every contract whose own text or whose ancestors use it. *)
+    val base_names =
+      distinct (op =) (maps scan_base_calls (texts @ map_filter (fn y => Option.map (fn (_, b, _) => b) (clookupN thy y)) ancestors) @ filter (String.isPrefix "base__") (maps (map fst o #methods o data_of) ancestors))
+    val base_hidden =
+      map (fn n =>
+        let
+          val (a, m) = the (base_call n)
+          val _ = if member (op =) ancestors a then ()
+                  else error ("the explicit call " ^ a ^ "." ^ m ^ ": " ^ a ^ " is not a base of this contract")
+          val z = (case filter (fn y => member (op =) (own_methods_of thy y) m andalso not (is_abstract_in y m)) (c3_lin thy [a]) of
+                     [] => error ("the explicit call " ^ a ^ "." ^ m ^ ": no definition of " ^ m ^ " in " ^ a ^ " or its bases")
+                   | z :: _ => z)
+          val _ = if nonexternal z m then ()
+                  else error ("the explicit call " ^ a ^ "." ^ m ^ ": " ^ m ^ " is an external function")
+        in (n, z) end) base_names
+    val inherited_def = inherited @ inherited_hidden @ own_hidden @ base_hidden
 
     (* The alias of a method of the base z: that method applied to the dispatcher composed with the injection and, for the base's
        external function, to a function that ignores its argument and returns this contract's external function applied to the dispatcher. *)
