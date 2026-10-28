@@ -1,5 +1,5 @@
 theory Unit_Tests
-imports Solidity "HOL-Library.Code_Target_Numeral" "HOL-Library.Code_Target_Nat" "HOL-Library.Code_Target_Int"
+imports Solidity_Main "HOL-Library.Code_Target_Numeral" "HOL-Library.Code_Target_Nat" "HOL-Library.Code_Target_Int"
 begin
 
 section \<open>Examples\<close>
@@ -52,26 +52,26 @@ FIXME:
   lookup does not work for uninitialized storage (is this intended)
 *)
 
-global_interpretation method: Method A1 250 100
-  defines method_sender_monad = method.sender_monad
-      and method_value_monad  = method.value_monad
-      and method_timestamp_monad  = method.block_timestamp_monad
-      and method_null_monad  = method.null_monad
+global_interpretation mthd: Method A1 250 100
+  defines method_sender_monad = mthd.sender_monad
+      and method_value_monad  = mthd.value_monad
+      and method_timestamp_monad  = mthd.block_timestamp_monad
+      and method_null_monad  = mthd.null_monad
   by standard (auto simp add: null_def)
 
-global_interpretation contract: Contract A1 
-  defines contract_assign_stack_monad = contract.assign_stack_monad
-      and contract_assign_stack       = contract.assign_stack
-      and contract_stackLookup        = contract.stackLookup
-      and contract_storeLookup        = contract.storeLookup
-      and contract_assign_storage_monad = contract.assign_storage_monad
-      and contract_assign_storage = contract.assign_storage
-      and contract_storage_update_monad = contract.storage_update_monad
-      and contract_storage_update = contract.storage_update
-      and contract_this_monad = contract.this_monad
-      and contract_storearrayLength = contract.storeArrayLength
-      and contract_arrayLength = contract.arrayLength
-      and contract_allocate = contract.allocate
+global_interpretation ctr: Contract A1 
+  defines contract_assign_stack_monad = ctr.assign_stack_monad
+      and contract_assign_stack       = ctr.assign_stack
+      and contract_stackLookup        = ctr.stackLookup
+      and contract_storeLookup        = ctr.storeLookup
+      and contract_assign_storage_monad = ctr.assign_storage_monad
+      and contract_assign_storage = ctr.assign_storage
+      and contract_storage_update_monad = ctr.storage_update_monad
+      and contract_storage_update = ctr.storage_update
+      and contract_this_monad = ctr.this_monad
+      and contract_storearrayLength = ctr.storeArrayLength
+      and contract_arrayLength = ctr.arrayLength
+      and contract_allocate = ctr.allocate
   .
 
 global_interpretation keccak256: Keccak256 id "\<lambda>x. Empty" "\<lambda>x. null" "\<lambda>x. False" "\<lambda>ep st bal a f vs. None"
@@ -1897,5 +1897,218 @@ lemma "is_Exception (execute (do {
          bytes_monad 33 (array 33 CHR 0x00)
       }) emptyState)"
   by normalization
+
+section \<open>Inheritance: refused commands\<close>
+
+ML \<open>
+  (*run the commands in the text on the current theory; the message of the error, or NONE if they succeed*)
+  fun failure thy text =
+    let
+      val trs = Outer_Syntax.parse_text thy (K thy) Position.start text
+      val result = Exn.capture (fn () => fold (Toplevel.command_exception false) trs (Toplevel.make_state (SOME thy))) ()
+    in (case result of Exn.Res _ => NONE | Exn.Exn e => SOME (Runtime.exn_message e)) end;
+
+  fun expect_failure thy text fragment =
+    (case failure thy text of
+       NONE => error ("expected an error containing: " ^ fragment)
+     | SOME msg => if String.isSubstring fragment msg then () else error ("wrong error: " ^ msg ^ "\nexpected: " ^ fragment));
+\<close>
+
+contract UtO
+  for "STR ''o''": "SType.TValue TSint"
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction uo external
+where
+  "\<langle>skip\<rangle>"
+
+contract UtA is UtO
+  for "STR ''a''": "SType.TValue TSint"
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction ua external
+where
+  "\<langle>skip\<rangle>"
+
+contract UtB is UtO
+  for "STR ''b''": "SType.TValue TSint"
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction ub external
+where
+  "\<langle>skip\<rangle>"
+
+(*UtX lists its bases as A, B; UtY as B, A: the orders contradict each other*)
+contract UtX is UtA, UtB
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction ux external
+where
+  "\<langle>skip\<rangle>"
+
+contract UtY is UtB, UtA
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction uy external
+where
+  "\<langle>skip\<rangle>"
+
+contract UtP
+  for "STR ''p''": "SType.TValue TSint"
+
+constructor
+param "STR ''k''": "SType.TValue TSint"
+where
+  "\<langle>skip\<rangle>"
+
+cfunction up external
+where
+  "\<langle>skip\<rangle>"
+
+ML \<open>
+  val thy = \<^theory>;
+  (*the linearisations of two bases that order UtA and UtB differently cannot be merged*)
+  val _ = expect_failure thy
+    "contract UtZ is UtX, UtY constructor where \"\<langle>skip\<rangle>\" cfunction uz external where \"\<langle>skip\<rangle>\""
+    "inconsistent linearisation";
+  (*... while one order is fine*)
+  val _ = (case failure thy
+    "contract UtZ2 is UtX constructor where \"\<langle>skip\<rangle>\" cfunction uz external where \"\<langle>skip\<rangle>\"" of
+      NONE => () | SOME msg => error ("a diamond with consistent orders was refused: " ^ msg));
+  (*the constructor of UtP takes one argument: two are given*)
+  val _ = expect_failure thy
+    "contract UtW is UtP (\"\<langle>sint\<rangle> 1\", \"\<langle>sint\<rangle> 2\") constructor where \"\<langle>skip\<rangle>\" cfunction uw external where \"\<langle>skip\<rangle>\""
+    "takes 1 argument";
+  (*replacing the constructor of a contract that is not a base*)
+  val _ = expect_failure thy
+    "contract UtV is UtO constructor replacing UtP \"\<langle>skip\<rangle>\" where \"\<langle>skip\<rangle>\" cfunction uv external where \"\<langle>skip\<rangle>\""
+    "not a base of this contract";
+  (*a base constructor that takes arguments that nobody gives (a Solidity contract in this position would have to be abstract): accepted, the
+    arguments are unspecified*)
+  val _ = (case failure thy
+    "contract UtQ is UtP constructor where \"\<langle>skip\<rangle>\" cfunction uq external where \"\<langle>skip\<rangle>\"" of
+      NONE => () | SOME msg => error ("missing base-constructor arguments were refused: " ^ msg));
+\<close>
+
+section \<open>Inheritance: executed behaviour\<close>
+
+abbreviation "va \<equiv> STR ''a''"
+abbreviation "vb \<equiv> STR ''b''"
+abbreviation "vc \<equiv> STR ''c''"
+
+
+contract DBase
+  for va: "SType.TValue TSint"
+
+constructor
+where
+  "va [] ::=\<^sub>s va ~\<^sub>s [] \<langle>*\<rangle> \<langle>sint\<rangle> 10 \<langle>+\<rangle> \<langle>sint\<rangle> 1"
+
+cfunction dbase external
+where
+  "\<langle>skip\<rangle>"
+
+contract DL is DBase
+  for vb: "SType.TValue TSint"
+
+constructor
+where
+  "va [] ::=\<^sub>s va ~\<^sub>s [] \<langle>*\<rangle> \<langle>sint\<rangle> 10 \<langle>+\<rangle> \<langle>sint\<rangle> 2"
+
+cfunction dl external
+where
+  "\<langle>skip\<rangle>"
+
+contract DR is DBase
+  for vc: "SType.TValue TSint"
+
+constructor
+where
+  "va [] ::=\<^sub>s va ~\<^sub>s [] \<langle>*\<rangle> \<langle>sint\<rangle> 10 \<langle>+\<rangle> \<langle>sint\<rangle> 3"
+
+cfunction dr external
+where
+  "\<langle>skip\<rangle>"
+
+contract DD is DBase, DL, DR
+
+constructor
+where
+  "va [] ::=\<^sub>s va ~\<^sub>s [] \<langle>*\<rangle> \<langle>sint\<rangle> 10 \<langle>+\<rangle> \<langle>sint\<rangle> 4"
+
+cfunction dd external
+where
+  "\<langle>skip\<rangle>"
+
+
+context dD
+begin
+
+lemma ctor_order:
+  "effect (constructor call) s r \<Longrightarrow>
+   post s r (\<lambda>s r s'. state.Storage s' this va = storage_data.Value (Uint 1234)) (K True)"
+  unfolding constructor_def
+  apply (erule post_exc_true, erule_tac post_wp)
+  by vcg_all
+
+end
+
+abbreviation "vv \<equiv> STR ''v''"
+
+contract VdA
+  for vv: "SType.TValue TSint"
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction g
+where
+  "vv [] ::=\<^sub>s \<langle>sint\<rangle> 1" ,
+
+cfunction callG external
+where
+  "icall g"
+
+contract VdB is VdA
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction g
+where
+  "vv [] ::=\<^sub>s \<langle>sint\<rangle> 2"
+
+context vdB
+begin
+
+(*callG is inherited from VdA, whose g is overridden here: the call reaches the override*)
+lemma dispatch_reaches_override:
+  "effect (callG call) s r \<Longrightarrow>
+   post s r (\<lambda>s r s'. state.Storage s' this vv = storage_data.Value (Uint 2)) (K True)"
+  unfolding callG_def vdA.callG_def[OF vdA_const] icall_def
+  apply (erule post_exc_true, erule_tac post_wp)
+  apply vcg
+  apply (simp add: call.simps g_def)
+  apply vcg_all
+  done
+
+end
 
 end

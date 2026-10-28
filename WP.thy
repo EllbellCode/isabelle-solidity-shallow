@@ -344,6 +344,12 @@ lemma wpget[wprules]:
   shows "wp get P E s"
   unfolding wp_def using assms by (simp add: execute_simps)
 
+lemma wpexc[wprules]:
+  assumes "wp m P (\<lambda>e s'. E e s) s"
+  shows "wp (exc m) P E s"
+  using assms unfolding wp_def exc_def
+  by (cases "execute m s" rule: result_cases) (simp_all add: execute_simps)
+
 lemma wpbind[wprules]:
   assumes "wp f (\<lambda>a. (wp (g a) P E)) E s"
   shows "wp (f \<bind> g) P E s"
