@@ -58,7 +58,7 @@ sig
     {lthy: Proof.context, pi: morphism, data: Solidity_Data.data, ct: typ, vcond: term, vcond_thms: thm list, invariant: term, lems: (term * term list) list list list} ->
     (string * string) list -> thm list -> thm list list option list
   val frame_proofs:
-    {lthy: Proof.context, pi: morphism, data: Solidity_Data.data, lems: (term * term list) list list list} ->
+    {lthy: Proof.context, pi: morphism, data: Solidity_Data.data, invariant: term, lems: (term * term list) list list list} ->
     (string * string) list -> thm list list option list
   val assemble: int -> (thm list -> thm list list option list) -> (term * term list) list list list -> thm list list -> thm list list
 end
@@ -645,10 +645,14 @@ fun discharge {lthy, pi, data, ct, vcond, vcond_thms, invariant, lems} inherited
    variables): the proof of a method that leaves the invariant alone is tried -- unfold the alias and the definition in the base, weakest
    precondition, then simplify the updates of the storage. It succeeds when the method does not call other methods (their obligations
    would need the pairs of those methods) and does not change what the invariant looks at. What it does not prove stays a goal for the user. *)
-fun frame_proofs {lthy, pi, data, lems} foreign_defs =
+fun frame_proofs {lthy, pi, data, invariant, lems} foreign_defs =
   let
     val thy = Proof_Context.theory_of lthy
-    val timeout = Time.fromSeconds 30
+    (*the introduction rule of the invariant (named <invariant>I by the `invariant` command)*)
+    val intro =
+      (case Term.head_of invariant of
+         Const (c, _) => try (Proof_Context.get_thm lthy) (Long_Name.base_name c ^ "I")
+       | _ => NONE)
     fun for_method (mname, md: mdata) groups =
       (case AList.lookup (op =) foreign_defs mname of
          NONE => NONE
@@ -662,20 +666,45 @@ fun frame_proofs {lthy, pi, data, lems} foreign_defs =
              val get = Proof_Context.get_thm lthy
              fun isar ctxt txt =
                Context_Tactic.NO_CONTEXT_TACTIC ctxt (Method.evaluate (fst (Method.read_closure_input ctxt (Input.string txt))) ctxt [])
-             fun tac ctxt =
+             fun entry ctxt =
                Local_Defs.unfold_tac ctxt [alias_def, base_def]
                THEN eresolve_tac ctxt [get "post_exc_true"] 1
                THEN eresolve_tac ctxt [get "post_wp"] 1
                THEN Local_Defs.unfold_tac ctxt [get "inv_state_def"]
+             (*a method that leaves the invariant alone*)
+             fun tac ctxt =
+               entry ctxt
                THEN Context_Tactic.NO_CONTEXT_TACTIC ctxt
                       (Method.evaluate (Method.Source (Token.make_src ("vcg", Position.none) [])) ctxt [])
                THEN isar ctxt "auto simp: storage_update_def"
                THEN TRY (isar ctxt "drule sym, simp")
-             fun prove (group: (term * term list) list) =
-               (case Exn.capture (Timeout.apply timeout (fn () =>
+             (*a method that updates mappings: the typing of the mappings is taken apart into functions, the updates are simplified, and
+               the introduction rule of the invariant is applied (its witnesses are the updated functions, found by unification once
+               the equations are simplified); the rule is not a wp rule meanwhile, or vcg would apply it too early*)
+             fun tac_maps ctxt0 =
+               let
+                 val ctxt = (case intro of SOME th => Context.proof_map (Named_Theorems.del_thm "WP.wprules" th) ctxt0 | NONE => ctxt0)
+                 fun all_try txt = isar ctxt ("all \<open>(" ^ txt ^ ")?\<close>")
+                 val clar = "clarsimp simp: wpsimps dest!: wpdrules split: if_splits"
+                 val typing = [all_try "(drule typed_map1)+", all_try "(drule typed_map2)+", all_try "elim exE conjE"]
+                 fun refl_tac ctxt' = ALLGOALS (TRY o (resolve_tac ctxt' [@{thm conjI}] THEN' resolve_tac ctxt' [@{thm refl}]))
+                                      THEN ALLGOALS (TRY o resolve_tac ctxt' [@{thm refl}])
+               in
+                 entry ctxt
+                 THEN isar ctxt "vcg_all"
+                 THEN EVERY (typing @ [all_try clar, all_try "vcg_all"])
+                 THEN EVERY (typing @ [all_try clar, all_try "vcg_all", all_try clar])
+                 THEN ALLGOALS (TRY o resolve_tac ctxt (the_list intro))
+                 THEN all_try "clarsimp simp: storage_update_def fun_upd_apply wpsimps"
+                 THEN refl_tac ctxt
+                 THEN all_try "auto simp: fun_upd_apply"
+               end
+             fun prove_with (tac, secs) (group: (term * term list) list) =
+               (case Exn.capture (Timeout.apply (Time.fromSeconds secs) (fn () =>
                    Goal.prove lthy ("s" :: "r" :: pnames) [] (fst (hd group)) (fn {context, ...} => tac context))) () of
                   Exn.Res th => SOME th
                 | Exn.Exn exn => if Exn.is_interrupt exn then Exn.reraise exn else NONE)
+             fun prove group = get_first (fn t => prove_with t group) [(tac, 15), (tac_maps, 120)]
              val proofs = map prove groups
            in
              if forall is_some proofs then SOME (map (fn p => [the p]) proofs) else NONE

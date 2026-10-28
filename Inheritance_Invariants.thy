@@ -225,4 +225,70 @@ proof -
     by vcg
 qed
 
+subsection \<open>Inherited methods that update mappings\<close>
+
+text \<open>
+  The invariant types all state variables of the contract, so an inherited method that writes into a mapping has to be shown to keep the mapping
+  typed. \<open>verification\<close> proves this itself (a second strategy after the one for methods that leave the state alone): the typing of the mappings is
+  taken apart into functions (\<open>typed_map1\<close>, \<open>typed_map2\<close> in \<open>WP.thy\<close>), the updates are simplified, and the introduction rule of the invariant is
+  applied with the updated functions as witnesses. \<open>Tagged\<close> inherits \<open>put\<close> (writes one entry of \<open>stock\<close>) and \<open>copy\<close> (reads one entry and writes
+  another); the invariant is about the new variable \<open>tag\<close>. Only the constructor and \<open>retag\<close> remain.
+\<close>
+
+abbreviation "stock \<equiv> STR ''stock''"
+abbreviation "tag \<equiv> STR ''tag''"
+
+contract Ledger
+  for stock: "SType.TMap (SType.TValue TAddress) (SType.TValue TSint)"
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction put external
+param "STR ''who''" : "SType.TValue TAddress"
+and "STR ''amount''" : "SType.TValue TSint"
+where
+  "assign_storage_monad stock [stackLookup (STR ''who'') []] (stackLookup (STR ''amount'') [])" ,
+
+cfunction copy external
+param "STR ''from''" : "SType.TValue TAddress"
+and "STR ''to''" : "SType.TValue TAddress"
+where
+  "assign_storage_monad stock [stackLookup (STR ''to'') []] (stock ~\<^sub>s [stackLookup (STR ''from'') []])"
+
+contract Tagged is Ledger
+  for tag: "SType.TValue TSint"
+
+constructor
+where
+  "tag [] ::=\<^sub>s \<langle>sint\<rangle> 1"
+
+cfunction retag external
+where
+  "tag [] ::=\<^sub>s tag ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 1"
+
+invariant tag_set ts where
+    "\<exists>v. fst ts tag = storage_data.Value (Uint v)"
+  for "Tagged"
+
+verification tag_set_v:
+  tag_set
+  for "Tagged"
+proof -
+  show "\<And>call. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> effect (constructor call) s r \<Longrightarrow>
+        post s r (K (K (inv_state tag_set))) (K True)"
+    unfolding constructor_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: tag_setI | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (retag call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> inv_state tag_set s \<Longrightarrow>
+        post s r (K (K (inv_state tag_set))) (K True)"
+    unfolding retag_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: tag_setI | auto simp: storage_update_def | (drule sym, simp))+
+qed
+
 end

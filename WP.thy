@@ -350,6 +350,24 @@ lemma wpexc[wprules]:
   using assms unfolding wp_def exc_def
   by (cases "execute m s" rule: result_cases) (simp_all add: execute_simps)
 
+text \<open>Typing facts about mappings, as functions (used by the automatic frame proofs of inherited methods, \<open>Inheritance.ML\<close>): a mapping whose entries all have
+  the same value constructor \<open>c\<close> (\<open>Uint\<close>, \<open>Address\<close>, \<open>Bool\<close>, ...) is that constructor applied to a function.\<close>
+
+lemma typed_map1:
+  assumes "\<forall>y. \<exists>w. mm y = storage_data.Value (c w)"
+  shows "\<exists>f. \<forall>y. mm y = storage_data.Value (c (f y))"
+  using assms by metis
+
+lemma typed_map2:
+  assumes "\<forall>ya. \<exists>mb. MM ya = storage_data.Map mb \<and> (\<forall>yb. \<exists>w. mb yb = storage_data.Value (c w))"
+  shows "\<exists>g h. \<forall>ya. MM ya = storage_data.Map (g ya) \<and> (\<forall>yb. g ya yb = storage_data.Value (c (h ya yb)))"
+proof -
+  obtain g where g: "\<forall>ya. MM ya = storage_data.Map (g ya) \<and> (\<forall>yb. \<exists>w. g ya yb = storage_data.Value (c w))" using assms by metis
+  then have "\<forall>ya yb. \<exists>w. g ya yb = storage_data.Value (c w)" by blast
+  then obtain h where "\<forall>ya yb. g ya yb = storage_data.Value (c (h ya yb))" by metis
+  with g show ?thesis by metis
+qed
+
 lemma wpbind[wprules]:
   assumes "wp f (\<lambda>a. (wp (g a) P E)) E s"
   shows "wp (f \<bind> g) P E s"

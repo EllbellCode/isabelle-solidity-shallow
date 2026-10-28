@@ -382,7 +382,7 @@ val _ = let
         val inherited_defs = the_default [] inherited
         (*inherited methods of bases that did not verify this invariant: an automatic proof is tried*)
         val foreign_defs = filter_out (fn (m, _) => AList.defined (op =) inherited_defs m) (the_default [] all_inherited)
-        val framed = Inh.frame_proofs {lthy = lthy, pi = pi, data = data, lems = lems} foreign_defs
+        val framed = Inh.frame_proofs {lthy = lthy, pi = pi, data = data, invariant = invs, lems = lems} foreign_defs
         val is_inherited = map2 (fn (m, _) => fn f => AList.defined (op =) inherited_defs m orelse is_some f) (#methods data) framed
         val ovr_goals = Inh.override_goals lthy data vcond invs ovr
         val user_goals = Inh.user_goals lem is_inherited lems ovr_goals
