@@ -28,6 +28,14 @@ Isabelle/Solidity consists of the following theories:
 - `Inheritance.ML`, `Inheritance_Bank.thy`, `Inheritance_Constructors.thy`, `Inheritance_Abstract.thy`: Inheritance for the `contract` and `verification` commands, with examples (see below).
 - `document.pdf`: A pdf document containing all the formalizations.
 
+## Extensions for generated code
+
+`Solidity_Ext.thy` adds what the transpiler (`transpile.py`, in the transpiler repository) needs beyond the core theories: `address.balance`, `tx.origin` and
+block constants as unconstrained values, the non-payable check `value_guard`, checked and wrapping arithmetic on narrow `uintN` and on signed `int256`
+(`below_monad`, `sless_monad`, `sdiv_safe_monad`, `smod_monad`, ...), division and modulo with a zero-divisor revert, `pop` and `delete` of arrays,
+and the monotonicity and `wp` rules for all of them. `Solidity_Main` does not import it: the rules it adds are not in the environment of hand-written
+proofs unless they import `Solidity_Ext`. Generated theories import `Solidity.Solidity_Main` and `Solidity.Solidity_Ext`.
+
 ## Inheritance
 
 A contract can inherit from other contracts, as in Solidity:

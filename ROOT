@@ -17,6 +17,7 @@ session "Isabelle-Solidity" = "HOL-Library" +
     Mcalc
     MTests
     Solidity_Main
+    Solidity_Ext
     Unit_Tests
     Bank
     Token
