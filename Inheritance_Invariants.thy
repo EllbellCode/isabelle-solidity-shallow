@@ -291,13 +291,14 @@ proof -
     by (vcg wprules: tag_setI | auto simp: storage_update_def | (drule sym, simp))+
 qed
 
-subsection \<open>Overriding a method whose pair mentions \<open>msg_value\<close>\<close>
+subsection \<open>Overriding a method whose pair mentions \<open>msg_value\<close>, with a postcondition that the simplifier rewrites\<close>
 
 text \<open>
   The condition of a verification depends on the variables of the contract that the pairs mention, so its parameters are not always the same.
   An override whose pair differs from the base's has to imply the base's: this goal is built with the parameters of the base's condition
-  (this test would fail if they were assumed to be \<open>msg_sender\<close> and \<open>this\<close>). The base's postcondition is about the final state only, the
-  override's relates the initial and the final state and says more.
+  (this test would fail if they were assumed to be \<open>msg_sender\<close> and \<open>this\<close>). The base's postcondition relates the initial and the final
+  state; the override's adds a conjunct, so it is a conjunction nested to the left, which the simplifier flattens: the proved rule has to be
+  simplified like the goals before it is applied (otherwise the final proof fails to match them).
 \<close>
 
 abbreviation "ovx \<equiv> STR ''x''"
@@ -337,7 +338,7 @@ abbreviation (in Solidity) ov_sp_g_a where "ov_sp_g_a s r s' \<equiv> state.Stor
 abbreviation (in Solidity) ov_sp_g_b where "ov_sp_g_b s r s' \<equiv> ov_sp_g_a s r s' \<and> state.Storage s' this STR ''y'' = storage_data.Value (Uint 2)"
 abbreviation (in Solidity) ov_rv_g where "ov_rv_g s \<equiv> False"
 abbreviation (in Solidity) ov_pre_h where "ov_pre_h _ _ \<equiv> True"
-abbreviation (in Solidity) ov_sp_h_a where "ov_sp_h_a v st rr st' \<equiv> state.Storage st' this STR ''x'' = storage_data.Value (Uint v)"
+abbreviation (in Solidity) ov_sp_h_a where "ov_sp_h_a v st rr st' \<equiv> state.Storage st' this STR ''x'' = storage_data.Value (Uint v) \<and> state.Storage st' this STR ''done'' = state.Storage st this STR ''done''"
 abbreviation (in Solidity) ov_sp_h_b where "ov_sp_h_b v st rr st' \<equiv> ov_sp_h_a v st rr st' \<and> state.Storage st' this STR ''y'' = storage_data.Value (Uint 2)"
 abbreviation (in Solidity) ov_rv_h where "ov_rv_h v s \<equiv> msg_value < 0"
 

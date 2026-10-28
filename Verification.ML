@@ -179,6 +179,10 @@ val _ = let
       let
         val rules = assemble user_rules  (*the rules of the inherited methods are added*)
         val defs = map (snd #> #def #> Morphism.thm pi) mdata @ Named_Theorems.get ctxt "Contract.alias_defs"
+        (*The goals are simplified by auto_tac before the rules are applied, so the rules get the same simplification: a postcondition that the
+          simplifier rewrites (a conjunction nested to the left, `P /\ True`, ...) would not match its own rule otherwise.*)
+        val norm_ctxt = ctxt delsimps @{thms K.simps} addsimps vcond_thm
+        val norm_rules = map (map (Simplifier.asm_full_simplify norm_ctxt)) rules
         fun select_tac context (t,i) =
           let
             val concl = t |> Logic.strip_assums_concl |> HOLogic.dest_Trueprop
@@ -187,13 +191,13 @@ val _ = let
               (*internal*)
               Const (\<^const_name>\<open>Solidity.Contract.post\<close>, _) $ _ $ _ $ _
                 $ (Const (\<^const_name>\<open>Utils.K\<close>, _) $ Const (\<^const_name>\<open>True\<close>, _))
-                => (eresolve_tac context (flat rules) THEN_ALL_NEW force_tac (ctxt addsimps defs)) i
+                => (eresolve_tac context (flat norm_rules) THEN_ALL_NEW force_tac (ctxt addsimps defs)) i
               (*external*)
             | Const (\<^const_name>\<open>Solidity.Contract.post\<close>, _) $ _ $ _ $ _ $ _
                 => (resolve_tac context [@{thm Contract.post_true}]
                     THEN' force_tac (ctxt addsimps defs)
                     THEN' force_tac ctxt
-                    THEN' eresolve_tac context (flat rules)
+                    THEN' eresolve_tac context (flat norm_rules)
                     THEN_ALL_NEW force_tac (ctxt addsimps defs)) i
             | _ => (K no_tac) i
           end;
