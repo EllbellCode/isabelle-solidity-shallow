@@ -662,7 +662,7 @@ fun frame_proofs {lthy, pi, data, invariant, lems} foreign_defs =
            let
              val bd = the (mlookupN thy bname)
              val b_const = local_instance lthy (#locale bd)
-             val base_def = Global_Theory.get_thm thy (#locale bd ^ "." ^ mname ^ "_def") OF [b_const]
+             val base_def = Global_Theory.get_thm thy (#locale bd ^ "." ^ the_default mname (super_src mname) ^ "_def") OF [b_const]   (*a hidden method of a super call stands for the method of the base*)
              val alias_def = Morphism.thm pi (#def md)
              val pnames = map (fst #> fst) (#parlist md @ #memlist md @ #cdlist md)
              val get = Proof_Context.get_thm lthy
