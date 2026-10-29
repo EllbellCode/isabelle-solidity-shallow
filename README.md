@@ -96,6 +96,15 @@ mapping updates the user proves the goal, as for the new methods); what it prove
 methods that call other methods and methods that change what the invariant looks at: they stay goals, as do the constructor and the new
 and overridden methods (`Inheritance_Invariants.thy`).
 
+**Methods that call methods, and revert conditions.** The condition `vcond` of a verification carries, for every method with a pair, its
+postcondition and, if the pair has a revert condition `rv`, also "does not revert if `rv` is false" and "reverts if `rv` is true". What a caller
+knows about a call of an internal method is therefore exactly its pair, and a caller's own revert condition can be exact in both directions.
+`verification` generates for every internal method with a pair, a precondition and a revert condition a rule `wpc_<method>`
+(with the suffix of the verification, like `vcond_<m>`): after `vcg_all` has stopped at `wp (call M_m ..)`, `rule_tac call=call in wpc_<method>` steps over
+the call; the goals that remain are the precondition, what follows from the postcondition when the call does not revert, and what follows when it does.
+(The rule is not a `wprule`: its conclusion would unify with any `wp` goal.) A pair of an inherited internal method has to say what the method leaves
+alone (a frame condition), because the derived contract has variables the base does not know. Test: `Verification_Calls.thy`.
+
 **Several verifications of one contract.** A contract can verify several invariants, one `verification` each. The first keeps the names
 `vcond`, `vcond_<m>`, `<c>_external`; a further one adds `_<name of the verification>` to them (`vcond_owner_typed_v`). A derived contract that
 verifies an invariant which one of the verifications of its base verified reuses the proofs of that verification. A pair (`pre`, `post`, `rv`)

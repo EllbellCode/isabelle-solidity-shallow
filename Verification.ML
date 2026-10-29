@@ -14,7 +14,22 @@ open Solidity_Data
 structure Inh = Solidity_Inheritance
 
 val _ = let
-    fun mk_vcond sfx data ct prepost invs lthy =
+    (*The revert condition of a method (third component of a pair) as conjuncts of vcond: no revert when it is false, revert when it is true.
+      The calls of other methods are reasoned about through vcond, so it has to carry them. Same hypotheses as the goals R1/R2 of mk_proof.*)
+    fun rv_conjuncts rvs name mdata prepost frees mtrms ctrms invs =
+      (case AList.lookup (op =) rvs name of
+         NONE => []
+       | SOME rv =>
+           let
+             val rv_f = list_comb (rv, frees) $ s
+             val pre_f = (case prepost of (pre, _) :: _ => [list_comb (pre, frees) $ s] | [] => [])
+             val inv_f = if #external mdata then [mk_inv_state invs $ s] else []
+             fun const_post b = fst (mk_K b [stateT, rvalueT, stateT])
+             val e_false = fst (mk_K \<^Const>\<open>False\<close> [stateT])
+             fun conj (prem, i, e) = list_implies (inv_f @ pre_f @ mtrms @ ctrms @ [prem], post_t $ s $ r $ const_post i $ e)
+           in [conj (HOLogic.mk_not rv_f, \<^Const>\<open>True\<close>, e_false), conj (rv_f, \<^Const>\<open>False\<close>, mk_True2)] end)
+
+    fun mk_vcond sfx data ct prepost rvs invs lthy =
       let
         (*Constructor*)
         val cdata = #constructor data;
@@ -45,7 +60,8 @@ val _ = let
               in
                 list_implies (pre_cond, post_cond)
               end;
-            val prepost = map go prepost
+            val rv_cs = rv_conjuncts rvs name mdata prepost frees mtrms ctrms invs
+            val prepost = map go prepost @ rv_cs
             val prepost' =
               if #external mdata then
                 let
@@ -84,7 +100,7 @@ val _ = let
         |> export
       end
 
-    fun mk_vcond_lemmas sfx data vcond vcond_def prepost invs lthy =
+    fun mk_vcond_lemmas sfx data vcond vcond_def prepost rvs invs lthy =
       let
         (*Constructor*)
         val cdata = #constructor data;
@@ -130,7 +146,8 @@ val _ = let
                   in
                     list_implies (pre_cond, post_cond)
                   end;
-                val prepost = map go prepost
+                val rv_cs = rv_conjuncts rvs name mdata prepost frees mtrms ctrms invs
+                val prepost = map go prepost @ rv_cs
                 val prepost' =
                   if #external mdata then
                     let
@@ -192,6 +209,10 @@ val _ = let
               Const (\<^const_name>\<open>Solidity.Contract.post\<close>, _) $ _ $ _ $ _
                 $ (Const (\<^const_name>\<open>Utils.K\<close>, _) $ Const (\<^const_name>\<open>True\<close>, _))
                 => (eresolve_tac context (flat norm_rules) THEN_ALL_NEW force_tac (ctxt addsimps defs)) i
+              (*no revert (the exception part is K False): the rule of the method applies directly*)
+            | Const (\<^const_name>\<open>Solidity.Contract.post\<close>, _) $ _ $ _ $ _
+                $ (Const (\<^const_name>\<open>Utils.K\<close>, _) $ Const (\<^const_name>\<open>False\<close>, _))
+                => (eresolve_tac context (flat norm_rules) THEN_ALL_NEW force_tac (ctxt addsimps defs)) i
               (*external*)
             | Const (\<^const_name>\<open>Solidity.Contract.post\<close>, _) $ _ $ _ $ _ $ _
                 => (resolve_tac context [@{thm Contract.post_true}]
@@ -252,6 +273,64 @@ val _ = let
       in
         tap (K (writeln "Generating verification locale ..."))
         Expression.add_locale binding Binding.empty [] ([(#locale data,(("",true), (Expression.Positional [],[])))],[]) [Element.Assumes [((@{binding "external_inv"}, []), [(assumption, [])])]] thy
+      end
+
+    (*For each internal method with a pair and a revert condition, a rule wpc_<m> that steps over a call of the method using its pair (precondition,
+      postcondition, revert condition) through the hypothesis on the dispatcher that every verification has: after vcg_all has stopped at
+      `wp (call M_m ..)`, `rule_tac call=call in wpc_<m>`. (Not a wprule: its conclusion `wp (?call (M_m ..)) ..` would unify with any wp goal.)*)
+    fun mk_call_rules sfx data lname vcond vcond_thms name_ct ct prepost rvs lthy =
+      let
+        val pi = Proof_Context.theory_of lthy |> get_morphism (#locale data) lname
+        val method_thms = tl (map (Morphism.thm pi) vcond_thms)
+        val call = call name_ct
+        val P = Free ("P", rvalueT --> stateT --> @{typ bool})
+        val Q = Free ("Q", exT --> stateT --> @{typ bool})
+        val wp = \<^Const>\<open>wp rvalueT exT stateT\<close>
+        val ih =
+          HOLogic.mk_Trueprop
+            (HOLogic.mk_all ("x", ct, HOLogic.mk_all ("h", stateT, HOLogic.mk_all ("r", rT,
+              HOLogic.mk_imp (effect $ (call $ Free ("x", ct)) $ Free ("h", stateT) $ Free ("r", rT),
+                              vcond $ Free ("x", ct) $ Free ("h", stateT) $ Free ("r", rT))))))
+        fun rule ((name, mdata: mdata), vthm) lthy =
+          (case (#external mdata, AList.lookup (op =) prepost name, AList.lookup (op =) rvs name, #memlist mdata, #cdlist mdata) of
+             (false, SOME [(pre, post)], SOME rv, [], []) =>
+               let
+                 val frees = map (fst #> Free) (#parlist mdata)
+                 val constr_app = list_comb (instantiate_b_a2 (#dt_const mdata), frees)
+                 val pre_f = list_comb (pre, frees) $ s
+                 val rv_f = list_comb (rv, frees) $ s
+                 val post_f = list_comb (post, frees)
+                 val (_, ctxt) = Variable.add_fixes ("s" :: "call" :: "P" :: "Q" :: map (dest_Free #> fst) frees) lthy
+                 val ct_ = Thm.cterm_of ctxt
+                 val inst =
+                   Drule.infer_instantiate ctxt
+                     [(("c", 0), ct_ call), (("x", 0), ct_ constr_app), (("s", 0), ct_ s), (("P", 0), ct_ P), (("Q", 0), ct_ Q),
+                      (("Pp", 0), ct_ post_f), (("pre", 0), ct_ pre_f), (("rv", 0), ct_ rv_f)]
+                     (Proof_Context.get_thm ctxt "wp_call_pair")
+                 (*the rule: the hypothesis on the dispatcher, then the premises of the lemma without the first (which the hypothesis gives)*)
+                 val goal = Thm.concl_of inst
+                 val stmt_prems = ih :: tl (Thm.prems_of inst)
+                 fun tac {prems = [ih_thm, hpre, hpost, hrv], context} =
+                       let
+                         val ih_rule = @{thm spec} OF [@{thm spec} OF [@{thm spec} OF [ih_thm]]]   (*effect (call ?x) ?h ?r --> vcond ?x ?h ?r*)
+                         val first_tac =
+                           Subgoal.FOCUS_PREMS (fn {context = c, prems = ps, ...} =>
+                             cut_facts_tac [@{thm mp} OF [ih_rule, hd ps]] 1 THEN auto_tac (c addsimps [vthm])) context
+                       in
+                         resolve_tac context [inst] 1 THEN first_tac 1
+                         THEN resolve_tac context [hpre] 1
+                         THEN resolve_tac context [Object_Logic.rulify context hpost] 1 THEN REPEAT_DETERM (assume_tac context 1)   (*the subgoals are in flat form*)
+                         THEN resolve_tac context [Object_Logic.rulify context hrv] 1 THEN REPEAT_DETERM (assume_tac context 1)
+                       end
+                   | tac _ = no_tac
+                 val thm = Goal.prove ctxt [] stmt_prems goal tac
+                         |> singleton (Proof_Context.export ctxt lthy)
+               in
+                 Local_Theory.note ((Binding.name ("wpc_" ^ name ^ sfx), []), [thm]) lthy |> snd
+               end
+           | _ => lthy)
+      in
+        tap (K (writeln "Generating call rules ...")) (fold rule (#methods data ~~ method_thms) lthy)
       end
 
     fun mk_proof data lname inv_name vcond vcond_thms name_ct ct prepost rvs invs inherited all_inherited ovr lthy =
@@ -503,14 +582,15 @@ val _ = let
         val all_inherited = Option.map snd (Inh.ilookupN thy name_lc);
         val inherited = Option.map (filter (fn (_, b) => Inh.verified_with thy b invariant)) all_inherited;
       in
-        lthy |> mk_vcond sfx data ct prepost invariant
+        lthy |> mk_vcond sfx data ct prepost rvs invariant
              |> (fn ((vcond, vcond_name, vcond_def), lthy')
-               => mk_vcond_lemmas sfx data vcond vcond_def prepost invariant lthy'
+               => mk_vcond_lemmas sfx data vcond vcond_def prepost rvs invariant lthy'
              ||> Local_Theory.exit_global
              |> (fn ((name, thms), lthy'') => mk_locale sfx data name_lc vcond invariant name_ct ct lthy''
              |> (fn (lname, lthy''') => mk_wp_rule sfx vcond name_ct ct invariant lthy'''
              |> (fn ((wp_name, wp_thm), lthy'''')
-               => mk_proof data lname inv_name vcond thms name_ct ct prepost rvs invariant inherited all_inherited ovr lthy''''))))
+               => mk_call_rules sfx data lname vcond thms name_ct ct prepost rvs lthy''''
+             |> mk_proof data lname inv_name vcond thms name_ct ct prepost rvs invariant inherited all_inherited ovr))))
       end
     in
       solidity_command Toplevel.theory_to_proof @{command_keyword "verification"}

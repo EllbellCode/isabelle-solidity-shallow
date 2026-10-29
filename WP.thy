@@ -1042,6 +1042,54 @@ lemma (in Solidity) wp_post:
   using assms unfolding wp_def effect_def post_def inv_state_def
   by (cases "execute (c x) s") (auto)
 
+text \<open>
+  The same for a call that is known not to revert (the exception part of its postcondition is \<open>K False\<close>): then whatever the caller does when the
+  call reverts does not matter.
+\<close>
+lemma (in Solidity) wp_post_noexc:
+  assumes "(\<And>r. effect (c x) s r \<Longrightarrow> post s r P' (K False))"
+      and "\<And>a sa. P' s a sa \<Longrightarrow> P a sa"
+    shows "wp (c x) P Q s"
+  using assms unfolding wp_def effect_def post_def
+  by (cases "execute (c x) s") (auto)
+
+text \<open>
+  The call of a method that has a pair \<open>(pre, Pp, rv)\<close>: what is known about the call (the condition of the verification, as it is for a single call) gives
+  the weakest precondition, whether the call reverts or not. Used for the rules \<open>wpc_<method>\<close> that \<open>verification\<close> generates.
+\<close>
+lemma (in Solidity) wp_call_pair:
+  assumes "\<And>r. effect (c x) s r \<Longrightarrow>
+             (pre \<longrightarrow> post s r Pp (K True))
+             \<and> (pre \<longrightarrow> \<not> rv \<longrightarrow> post s r (K (K (K True))) (K False))
+             \<and> (pre \<longrightarrow> rv \<longrightarrow> post s r (K (K (K False))) (K True))"
+      and "pre"
+      and "\<not> rv \<Longrightarrow> (\<And>v sa. Pp s v sa \<Longrightarrow> P v sa)"
+      and "rv \<Longrightarrow> (\<And>e sa. Q e sa)"
+    shows "wp (c x) P Q s"
+proof (cases "execute (c x) s" rule: result_cases)
+  case (n a sa)
+  have eff: "effect (c x) s (Inl (a, sa))" using n unfolding effect_def by simp
+  have nrv: "\<not> rv"
+  proof
+    assume "rv"
+    from assms(1)[OF eff] assms(2) \<open>rv\<close> show False unfolding post_def by simp
+  qed
+  from assms(1)[OF eff] assms(2) have "Pp s a sa" unfolding post_def by simp
+  with assms(3)[OF nrv] n show ?thesis unfolding wp_def by simp
+next
+  case (e ex sa)
+  have eff: "effect (c x) s (Inr (ex, sa))" using e unfolding effect_def by simp
+  have "rv"
+  proof (rule ccontr)
+    assume "\<not> rv"
+    from assms(1)[OF eff] assms(2) \<open>\<not> rv\<close> show False unfolding post_def by simp
+  qed
+  with assms(4) e show ?thesis unfolding wp_def by simp
+next
+  case t
+  then show ?thesis unfolding wp_def by simp
+qed
+
 declare(in Contract) wp_stackCheck[wprules del]
 
 lemma (in Contract) wp_assign_stack_kdvalue[wprules]:
