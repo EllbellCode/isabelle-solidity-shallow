@@ -32,6 +32,7 @@ session "Isabelle-Solidity" = "HOL-Library" +
     Inheritance_Errors
     Inheritance_Callee
     Inheritance_Invariants
+    Inheritance_Reuse
     Verification_Calls
   document_files
     "root.tex"

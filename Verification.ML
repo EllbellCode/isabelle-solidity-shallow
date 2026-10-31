@@ -17,9 +17,10 @@ val _ = let
     (*The revert condition of a method (third component of a pair) as conjuncts of vcond: no revert when it is false, revert when it is true.
       The calls of other methods are reasoned about through vcond, so it has to carry them. Same hypotheses as the goals R1/R2 of mk_proof.*)
     fun rv_conjuncts rvs name mdata prepost frees mtrms ctrms invs =
-      (case AList.lookup (op =) rvs name of
-         NONE => []
-       | SOME rv =>
+      (case (#external mdata, AList.lookup (op =) rvs name) of
+         (true, _) => []   (*an external method is not called by another method: its revert condition is a goal of the user, not a fact about calls*)
+       | (_, NONE) => []
+       | (_, SOME rv) =>
            let
              val rv_f = list_comb (rv, frees) $ s
              val pre_f = (case prepost of (pre, _) :: _ => [list_comb (pre, frees) $ s] | [] => [])
