@@ -49,7 +49,7 @@ val _ = let
           val varsI = fst (Term.dest_Free var) :: map fst vars
           val premsI = HOLogic.mk_Trueprop inv :: prems
           fun mytac {context, prems} def =
-            rewrite_goal_tac context [def] THEN' blast_tac (context addSIs prems)
+            rewrite_goal_tac context [def] THEN' (fn i => blast_tac (context addSIs prems) i ORELSE Blast.depth_tac (context addSIs prems) 200 i)
 
           val (tm, thm, lthy) =
             let
