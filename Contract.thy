@@ -1,6 +1,7 @@
 theory Contract
   imports Solidity WP
   keywords "contract" :: thy_decl
+       and "solidity" :: thy_decl
        and "constructor"
        and "initialiser"
        and "replacing"
@@ -42,6 +43,7 @@ lemmas transfer_const [alias_defs] = External.transfer_monad_def[OF External_con
 ML_file Utils.ML
 ML_file Data.ML
 ML_file Inheritance.ML
+ML_file Solidity_Source.ML
 ML_file Specification.ML
 ML_file Invariant.ML
 ML_file Verification.ML

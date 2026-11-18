@@ -5,6 +5,8 @@ session "Isabelle-Solidity" = "HOL-Library" +
   sessions
     "HOL-Eisbach"
     "Finite-Map-Extras"
+  directories
+    source_tests
   theories
     Utils
     State_Monad
@@ -33,6 +35,29 @@ session "Isabelle-Solidity" = "HOL-Library" +
     Inheritance_Callee
     Inheritance_Invariants
     Inheritance_Calls
+    Solidity_Source_Tests
+    "source_tests/Solidity_Source_Diff"
+    "source_tests/Src_Mods"
+    "source_tests/Src_ModsAbbrev"
+    "source_tests/Src_Widths"
+    "source_tests/Src_Signed"
+    "source_tests/Src_Bits"
+    "source_tests/Src_Structs"
+    "source_tests/Src_Arrays"
+    "source_tests/Src_Libs"
+    "source_tests/Src_ExtAssume"
+    "source_tests/Src_Hash"
+    "source_tests/Src_Inh1"
+    "source_tests/Src_Inh14"
+    "source_tests/Src_Overloads"
+    "source_tests/Src_Fallback"
+    "source_tests/Src_CtorCalls"
+    "source_tests/Src_B04"
+    "source_tests/Src_Pool"
+    "source_tests/Src_ERC20"
+    "source_tests/Src_Jumps"
+    "source_tests/Src_Enums"
+    "source_tests/Src_FileLevel"
     Inheritance_Reuse
     Verification_Calls
   document_files

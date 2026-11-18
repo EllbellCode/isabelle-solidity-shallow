@@ -372,10 +372,49 @@ val _ = let
           (Parse.list1 (Parse.name -- Scan.optional (Parse.$$$ "(" |-- Parse.!!! (Parse.list Parse.term --| Parse.$$$ ")")) []))) [];
       val contract_parser = (Parse.binding -- parent_parser -- assuming_parser -- storage_list_parser) -- (constructor_parser -- (Parse.list method_parser))
     in
-      contract_parser >> mk_contract
+      (contract_parser >> mk_contract, mk_contract)
     end
+
+  (*the command `solidity`: the contracts of a Solidity source text, created like the `contract` command does (see Solidity_Source.ML)*)
+  fun mk_solidity inp thy =
+    let
+      val text = Input.string_of inp
+      val cs = Solidity_Source.read (Proof_Context.init_global thy) text
+      (*commands (the locale of the assumptions on callees) run on the theory first*)
+      fun run_commands text thy =
+        let
+          val trs = Outer_Syntax.parse_text thy (K thy) Position.start text
+        in Toplevel.theory_of (fold (Toplevel.command_exception false) trs (Toplevel.make_state (SOME thy))) end
+      fun create (c: Solidity_Source.contract) thy0 =
+        let
+          val thy = if #pre c = "" then thy0 else run_commands (#pre c) thy0
+          val method = fn (m: {name: string, external: bool, payable: bool, params: (string * string) list, body: string}) =>
+            (((((Binding.make (#name m, Input.pos_of inp), (#external m, #payable m)), #params m), []), []), #body m)
+          val constructor = (((((#payable c, #params c), []), #init c), #repl c), #body c)
+          (*[[solidity_abbreviations]]: STR names of the state variables of this contract*)
+          fun var_abbrevs thy' =
+            if not (Config.get_global thy' Solidity_Source.abbreviations) then thy'
+            else
+              fold (fn (vname, _) => fn th =>
+                let
+                  val n = Inh.plain vname
+                  val short = String.extract (n, size "STR ''", SOME (size n - size "STR ''" - 2))
+                in
+                  (run_commands ("abbreviation \"" ^ short ^ " \<equiv> STR ''" ^ short ^ "''\"") th handle ERROR _ => th)
+                end) (#variables c) thy'
+          val _ =
+            if Config.get_global thy0 Solidity_Source.show_output then
+              Output.writeln (cat_lines (the_list (if #pre c = "" then NONE else SOME (#pre c)) @ [Solidity_Source.show c]))
+            else ()
+        in
+          var_abbrevs (snd specparser
+            ((((Binding.make (#name c, Input.pos_of inp), #parents c), #assuming c), #variables c), (constructor, map method (#methods c))) thy)
+        end
+    in fold create cs thy end
 in
-  solidity_command Toplevel.theory @{command_keyword "contract"} "creates a contract" specparser
+  solidity_command Toplevel.theory @{command_keyword "contract"} "creates a contract" (fst specparser);
+  solidity_command Toplevel.theory @{command_keyword "solidity"} "creates the contracts of a Solidity source text"
+    (Parse.embedded_input >> mk_solidity)
 end
 
 end

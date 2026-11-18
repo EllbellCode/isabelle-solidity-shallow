@@ -36,6 +36,79 @@ block constants as unconstrained values, the non-payable check `value_guard`, ch
 and the monotonicity and `wp` rules for all of them. `Solidity_Main` does not import it: the rules it adds are not in the environment of hand-written
 proofs unless they import `Solidity_Ext`. Generated theories import `Solidity.Solidity_Main` and `Solidity.Solidity_Ext`.
 
+## Contracts as Solidity source text
+
+The command `solidity` takes Solidity source text and creates its contracts like the `contract` command does:
+
+```isabelle
+solidity \<open>
+contract Bank {
+    mapping(address => uint) balances;
+
+    function deposit() external payable { balances[msg.sender] += msg.value; }
+    function reset() internal { balances[msg.sender] = 0; }
+    function withdraw() external {
+        uint bal = balances[msg.sender];
+        reset();
+        payable(msg.sender).transfer(bal);
+    }
+}
+\<close>
+```
+
+The text is read by `Solidity_Source.ML` (lexer, parser, type-directed elaborator) into the data of the `contract` command: state variables,
+constructor and methods with their bodies as monadic terms, `contract D is B (args)` for inheritance. The rules of the translation are those
+of the transpiler `transpile.py` of the surrounding project (which gets the types from `solc`); `source_diff/diff.py` there compares the two
+term by term on a corpus of Solidity files, and the theories `source_tests/Src_*.thy` do so inside this session, against reference
+specifications (the output of the transpiler, committed with the tests, so that `solc` is not needed to check them).
+The `invariant` and `verification` commands work on the result unchanged.
+
+**Supported.** The types `uint8` ... `uint256` (the range is kept as in `Solidity_Ext`, "Narrow unsigned integers"), `int256` (two's
+complement, signed operators), `address` (payable), `bool`, `bytesN`, `string`, `bytes`, mappings, structs, arrays (`push`, `pop`, `.length`,
+`delete`, storage pointers), contract and interface types (a value is the address). State variables with an initial value, `constant`,
+`immutable`; constructor and functions (`external`/`public`, `internal`/`private`, `payable`, `view`/`pure`, `virtual`/`override`),
+`receive` and `fallback`; parameters, locals, return values (tail `return`, guard clauses, named results) and internal calls with arguments;
+the operators `+ - * / % ** & | ^ ~ << >> && || ! ?:` and comparisons (checked as in Solidity 0.8, `unchecked { }` for wrapping),
+assignments (also as values), `++`, `--`, `delete`; `if`, `while`, `for`, `do`-`while`, `break`, `continue` (flags that are locals of the function:
+`_brk<k>`, `_cnt<k>`, `_first<k>`, so that the loop is still one `while_monad`); enums (a `uint8` that stays below the number of members: `E.A` is
+the number, `E(x)` reverts unless `x` is below it, so does an external argument; enums at file or contract level) and user-defined value types
+(`type T is uint256`, `T.wrap`/`T.unwrap` are the identity); constants and functions outside of any contract (copied into each contract that mentions
+them, a free function becomes an internal function); `require`/`assert`/`revert` (a message is a string literal or a
+variable that holds one), `emit` (arguments are evaluated), `address.transfer` and the pattern `(bool ok, ) = a.call{value: v}(""); ...;
+require(ok);`; `msg.sender`, `msg.value`, `block.timestamp`, `block.number`, `block.chainid`, `tx.origin`, `address(x).balance`, `this`,
+`type(T).max`/`min`, `type(I).interfaceId`, number literals with units (`1 ether`); `keccak256` (of a byte string, of `abi.encode`/
+`abi.encodePacked` of several values) and `ecrecover`.
+
+**Inheritance.** Bases, base-constructor arguments (in the `is` list or the modifier list of the constructor, also for indirect bases), `super`,
+explicit base calls `A.f()`, abstract contracts and functions, overloaded functions (named after their parameter types), virtual modifiers
+(a derived class that overrides a modifier gives its constructor body for the base), modifiers of bases, library functions
+(`using L for T`, `L.f(x)`: internal ones are copied into the contract as `L__f`), interfaces.
+
+**Calls to other contracts.** `t.f(args)` on a value of contract or interface type is a call to code that is not modelled, as for the
+transpiler (`Solidity_Ext`, "Calls to other contracts"); the natspec lines `/// @custom:assume norevert|constant|min N|max N|nocallback` on the
+called function become the assumptions of a generated locale `<C>_Callee` that the contract imports.
+
+**Modifiers.** `modifier m(uint k) { require(...); _; ... }` is inserted at every use, as `transpile.py --inherit` does (the parameters and
+variables of the modifier get unique names `_m<k>_<name>`). With `declare [[solidity_modifier_abbreviations = true]]` each use is a locale
+abbreviation `mod_<Class>_<name>` instead (`mod_Vault_onlyOwner (body)`): the elaborated definitions are the same terms, so proofs are
+unchanged, but they print short.
+
+**What it creates.** For every contract the command writes, as a message of the command (the output panel of the IDE, the place where `value`
+or `thm` write), the text of the `contract` command that it hands to the framework: the state variables with their types, the constructor and
+each method with its body as a monadic term, in the form that `transpile.py` writes. That is the contract under the hood; pasting it into a
+theory gives the same contract. `declare [[solidity_show = false]]` switches the message off.
+
+**Options.** `[[solidity_value_guard]]` (default true): a function or constructor that is not payable starts with `value_guard` (Solidity
+reverts when `msg.value > 0`; needs `Solidity_Ext`); the hand-written specifications do not have it, set it to false to get their terms.
+`[[solidity_abbreviations]]` (default false): `abbreviation balances \<equiv> STR ''balances''` for the state variables, as in the hand-written
+specifications. `[[solidity_modifier_abbreviations]]` (default false), see above.
+
+**Refused** (with line and column): the narrow signed types, `new`, inline assembly, tuple declarations other than the call pattern above, events with non-trivial arguments are evaluated but not logged, structs and
+arrays in memory or as parameters, `abi.encodeWithSelector` and the other `abi` functions, `this.f()`, call options other than `value`,
+library functions that are not internal, `import` (put the contracts in one text), `try`/`catch`, multiple return values, `bytes` `.length`/index and
+`string.concat` (the framework has no operation on the length of a byte string). The semantics are the framework's. What is still missing needs a
+change of the framework (a new kind of value or a new operation with its proof rules), not of the command; see the list in the project notes.
+
 ## Inheritance
 
 A contract can inherit from other contracts, as in Solidity:
