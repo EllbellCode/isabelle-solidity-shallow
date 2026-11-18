@@ -58,8 +58,12 @@ sig
     {lthy: Proof.context, pi: morphism, data: Solidity_Data.data, ct: typ, vcond: term, vcond_thms: thm list, invariant: term, lems: (term * term list) list list list} ->
     (string * string) list -> thm list -> thm list list option list
   val frame_proofs:
-    {lthy: Proof.context, pi: morphism, data: Solidity_Data.data, invariant: term, lems: (term * term list) list list list} ->
+    {lthy: Proof.context, pi: morphism, data: Solidity_Data.data, invariant: term, lems: (term * term list) list list list, vcond_thms: thm list} ->
     (string * string) list -> thm list list option list
+  val frame_calls: bool Config.T
+  val adopted: theory -> string -> term -> string list
+  val record_adopted: string -> term -> string list -> theory -> theory
+  val adopt_methods: theory -> Solidity_Data.data -> string -> term -> (string * string) list -> (string * string) list -> string list
   val assemble: int -> (thm list -> thm list list option list) -> (term * term list) list list list -> thm list list -> thm list list
 end
 
@@ -130,6 +134,21 @@ structure SuffixN = Theory_Data
   val empty = Symtab.empty
   val merge = Symtab.merge (K true)
 )
+
+(* contract |-> (invariant, internal methods for which its verification of the invariant assumed the pair "the invariant is preserved"):
+   see `adopt_methods` and [[verification_frame_calls]] *)
+structure AdoptN = Theory_Data
+(
+  type T = (term * string list) list Symtab.table
+  val empty = Symtab.empty
+  val merge = Symtab.merge (K true)
+)
+
+(* [[verification_frame_calls = true]]: a derived contract that verifies an invariant its base never verified assumes, for the inherited
+   internal methods that its inherited methods call, the pair "if the invariant holds before the call it holds after", and tries to prove
+   the inherited methods that call them by stepping over the calls with it (frame_proofs). Off by default: it changes the conditions
+   (vcond) and the goals of such verifications. *)
+val frame_calls = Attrib.setup_config_bool \<^binding>\<open>verification_frame_calls\<close> (K false);
 
 val ilookupN = Symtab.lookup o InheritN.get
 val clookupN = Symtab.lookup o CtorN.get
@@ -532,6 +551,40 @@ fun record_pairs name_lc invariant sfx prepost =
   VerifN.map (Symtab.map_default (name_lc, []) (cons (invariant, prepost)))
   #> SuffixN.map (Symtab.map_default (name_lc, []) (cons (invariant, sfx)))
 
+fun adopted thy x invariant =
+  these (Option.map snd (find_first (fn (inv, _) => inv aconv invariant) (these (Symtab.lookup (AdoptN.get thy) x))))
+
+fun record_adopted name_lc invariant ms =
+  AdoptN.map (Symtab.map_default (name_lc, []) (cons (invariant, ms)))
+
+(* The inherited internal methods without a pair that get the pair "the invariant is preserved" (see `frame_calls`): those that the inherited
+   methods of bases that did not verify the invariant call, directly or through other such methods; and those that a base took the pair for
+   in its own verification of the invariant (its conditions have it, so ours must too). `inherited` are the methods whose base verified
+   the invariant, `foreign` the others. *)
+fun adopt_methods thy (data: data) name_lc invariant inherited foreign =
+  let
+    val methods = #methods data
+    fun internal m = (case AList.lookup (op =) methods m of SOME md => not (#external md) | NONE => false)
+    fun external m = (case AList.lookup (op =) methods m of SOME md => #external md | NONE => false)
+    (*the methods of the base b that the definition of m (in b) calls by name*)
+    fun callees (m, b) =
+      let
+        val bd = the (mlookupN thy b)
+        val def = Global_Theory.get_thm thy (#locale bd ^ "." ^ the_default m (super_src m) ^ "_def")
+        val consts = Term.add_const_names (Thm.prop_of def) []
+        fun cname (md: mdata) = (case head_of (#dt_const md) of Const (c, _) => SOME c | _ => NONE)
+      in
+        map_filter (fn (g, md) => if (case cname md of SOME c => member (op =) consts c | NONE => false) then SOME g else NONE) (#methods bd)
+      end
+    fun close seen [] = seen
+      | close seen (mb :: rest) =
+          let
+            val new = filter (fn g => not (member (op =) seen g) andalso AList.defined (op =) foreign g andalso internal g) (callees mb)
+          in close (seen @ new) (rest @ map (fn g => (g, the (AList.lookup (op =) foreign g))) new) end
+    val from_foreign = close [] (filter (fn (m, _) => external m) foreign)
+    val from_bases = map_filter (fn (g, b) => if internal g andalso member (op =) (adopted thy b invariant) g then SOME g else NONE) inherited
+  in distinct (op =) (from_foreign @ from_bases) end
+
 (* The goals the user has to prove: the constructor, the methods that are not inherited, and the implication for each override. *)
 fun user_goals lem is_inh lems ovr_goals =
   lem :: flat (map2 (fn inhd => fn groups => if inhd then [] else groups) is_inh lems) @ ovr_goals
@@ -647,14 +700,34 @@ fun discharge {lthy, pi, data, ct, vcond, vcond_thms, invariant, lems} inherited
    variables): the proof of a method that leaves the invariant alone is tried -- unfold the alias and the definition in the base, weakest
    precondition, then simplify the updates of the storage. It succeeds when the method does not call other methods (their obligations
    would need the pairs of those methods) and does not change what the invariant looks at. What it does not prove stays a goal for the user. *)
-fun frame_proofs {lthy, pi, data, invariant, lems} foreign_defs =
+fun frame_proofs {lthy, pi, data, invariant, lems, vcond_thms} foreign_defs =
   let
     val thy = Proof_Context.theory_of lthy
-    (*the introduction rule of the invariant (named <invariant>I by the `invariant` command)*)
-    val intro =
+    (*the introduction rule of the invariant (named <invariant>I by the `invariant` command). An invariant declared for a base and verified
+      for this contract is known by its qualified name: its rule is then <base>.<invariant>I applied to the fact <base>_const, and
+      it and the elimination rule <base>.<invariant>E are made wprule and wperule (as they are in the locale of the base) for the proofs below;
+      only with [[verification_frame_calls]], the other proofs are unchanged.*)
+    val (intro, lthy) =
       (case Term.head_of invariant of
-         Const (c, _) => try (Proof_Context.get_thm lthy) (Long_Name.base_name c ^ "I")
-       | _ => NONE)
+         Const (c, _) =>
+           (case try (Proof_Context.get_thm lthy) (Long_Name.base_name c ^ "I") of
+              SOME th => (SOME th, lthy)
+            | NONE =>
+                let val loc = Long_Name.base_name (Long_Name.qualifier c)
+                in
+                  if not (Config.get lthy frame_calls) then (NONE, lthy) else
+                  (case (try (Proof_Context.get_thm lthy) (Long_Name.qualifier c ^ "." ^ Long_Name.base_name c ^ "I"),
+                         try (Proof_Context.get_thm lthy) (loc ^ "_const")) of
+                     (SOME th, SOME k) =>
+                       let
+                         val th' = th OF [k]
+                         val elim = try (fn () => Proof_Context.get_thm lthy (Long_Name.qualifier c ^ "." ^ Long_Name.base_name c ^ "E") OF [k]) ()
+                         val add_elim = (case elim of SOME e => Named_Theorems.add_thm "WP.wperules" e | NONE => I)
+                       in (SOME th', Context.proof_map (add_elim o Named_Theorems.add_thm "WP.wprules" th') lthy) end
+                   | _ => (NONE, lthy))
+                end)
+       | _ => (NONE, lthy))
+    val vcond_thms = map (Morphism.thm pi) vcond_thms
     fun for_method (mname, md: mdata) groups =
       (case AList.lookup (op =) foreign_defs mname of
          NONE => NONE
@@ -701,12 +774,64 @@ fun frame_proofs {lthy, pi, data, invariant, lems} foreign_defs =
                  THEN refl_tac ctxt
                  THEN all_try "auto simp: fun_upd_apply"
                end
+             (*a method that calls inherited internal methods which have the pair "the invariant is preserved" ([[verification_frame_calls]]):
+               each call is stepped over with wp_call_inv. That needs the invariant before the call (from the premises) and the condition
+               of the callee (from the hypothesis on the dispatcher); the rest of the body then continues in a state where the invariant
+               holds. What is left is closed as for a method that leaves the invariant alone.*)
+             fun tac_calls ctxt =
+               let
+                 val inv_def = get "inv_state_def"
+                 val rule = Drule.infer_instantiate ctxt [(("I", 0), Thm.cterm_of ctxt invariant)] (get "wp_call_inv")
+                 fun solved tac = tac THEN (fn st => if Thm.nprems_of st = 0 then Seq.single st else Seq.empty)
+                 fun is_call_goal t =
+                   (case Logic.strip_assums_concl t of
+                      Const (\<^const_name>\<open>Trueprop\<close>, _) $ (Const (\<^const_name>\<open>wp\<close>, _) $ m $ _ $ _ $ _) =>
+                        (case head_of m of Bound _ => true | Free ("call", _) => true | _ => false)
+                    | _ => false)
+                 (*the hypothesis on the dispatcher, as the focus shows it: an implication with schematic variables*)
+                 fun is_hyp th = (case Thm.prop_of th of Const ("Pure.imp", _) $ _ $ _ => true | _ => false)
+                 (*the invariant before the call*)
+                 val a2 =
+                   SELECT_GOAL (solved (
+                     Local_Defs.unfold_tac ctxt [inv_def]
+                     THEN TRY (resolve_tac ctxt (the_list intro) 1)
+                     THEN isar ctxt "auto simp: storage_update_def"))
+                 (*the condition of the callee, from the hypothesis on the dispatcher (the last two premises are the call's effect and the
+                   invariant before it)*)
+                 val a1 =
+                   SELECT_GOAL (solved (Subgoal.FOCUS_PREMS (fn {context = c, prems, ...} =>
+                     let
+                       val n = length prems
+                       val v = the (find_first is_hyp (take (n - 2) prems)) OF [nth prems (n - 2)]
+                       val v' = Simplifier.full_simplify (put_simpset HOL_basic_ss c addsimps vcond_thms) v
+                     in cut_facts_tac [v', nth prems (n - 1)] 1 THEN asm_full_simp_tac c 1 end) ctxt 1))
+                 val a4 = SELECT_GOAL (solved (ALLGOALS (simp_tac (ctxt addsimps @{thms K.simps}))))
+                 (*the premises of wp_call_inv in this order: invariant before, condition of the callee, the rest (kept), exceptions*)
+                 fun call_step i =
+                   SUBGOAL (fn (t, _) =>
+                     if not (is_call_goal t) then no_tac
+                     else
+                       resolve_tac ctxt [rule] i
+                       THEN a2 i THEN a1 i THEN a4 (i + 1)
+                       THEN TRY (rewrite_goal_tac ctxt [inv_def] i)) i
+                 fun round st = (isar ctxt "all \<open>(vcg_all)?\<close>" THEN ALLGOALS (fn i => TRY (call_step i))) st
+                 fun loop n st =
+                   if n = 0 then Seq.single st
+                   else ((CHANGED round THEN (fn st' => loop (n - 1) st')) ORELSE all_tac) st
+               in
+                 entry ctxt
+                 THEN (fn st => loop 20 st)
+                 THEN isar ctxt "all \<open>(auto simp: storage_update_def)?\<close>"
+                 THEN TRY (isar ctxt "drule sym, simp")
+               end
              fun prove_with (tac, secs) (group: (term * term list) list) =
                (case Exn.capture (Timeout.apply (Time.fromSeconds secs) (fn () =>
                    Goal.prove lthy ("s" :: "r" :: pnames) [] (fst (hd group)) (fn {context, ...} => tac context))) () of
                   Exn.Res th => SOME th
                 | Exn.Exn exn => if Exn.is_interrupt exn then Exn.reraise exn else NONE)
-             fun prove group = get_first (fn t => prove_with t group) [(tac, 15), (tac_maps, 120)]
+             fun prove group =
+               get_first (fn t => prove_with t group)
+                 ([(tac, 15), (tac_maps, 120)] @ (if Config.get lthy frame_calls then [(tac_calls, 120)] else []))
              val proofs = map prove groups
            in
              if forall is_some proofs then SOME (map (fn p => [the p]) proofs) else NONE

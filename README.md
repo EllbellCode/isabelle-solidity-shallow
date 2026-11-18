@@ -91,10 +91,20 @@ The methods are listed only to give them pairs; a method that is not listed is v
 **An invariant of its own.** A derived contract can also verify an invariant that its base never verified (about its own state
 variables, say; this is a further `verification` of the derived contract, see below). The obligations of the base cannot be
 reused then. For an inherited method `verification` tries the proof of a method that leaves the invariant alone (unfold the alias and
-the base's definition, weakest precondition, simplify the storage updates; it succeeds for methods that do not update maps, for those with
-mapping updates the user proves the goal, as for the new methods); what it proves is not shown as a goal. It does not prove
-methods that call other methods and methods that change what the invariant looks at: they stay goals, as do the constructor and the new
-and overridden methods (`Inheritance_Invariants.thy`).
+the base's definition, weakest precondition, simplify the storage updates, and for methods that update maps the typing of the maps taken
+apart); what it proves is not shown as a goal. Methods that change what the invariant looks at stay goals, as do the constructor and the
+new and overridden methods (`Inheritance_Invariants.thy`).
+
+**Inherited methods that call internal methods.** Inside a `verification` an internal method without a pair is known only as "anything",
+so an inherited method that calls one cannot be proved from the base alone. With `declare [[verification_frame_calls = true]]` (off by
+default: it changes the conditions `vcond` and the goals of such verifications) the verification of an invariant that the base did not
+verify gives the internal methods that the inherited methods call (directly or through each other) the pair "if the invariant holds before
+the call it holds after". The obligation of such a method is the one of a method that leaves the invariant alone (proved automatically when
+it does, a goal for the user when it does not, and then the verification cannot be completed unless the method really preserves the
+invariant), and the inherited methods that call them are proved by stepping over the calls with the pair (`wp_call_inv` in `WP.thy`): the
+invariant has to hold before each call (it is found from the premises), the rest of the body starts in a state where it holds. A further
+derived contract that verifies the same invariant takes over the pairs. A pair the user gives for such a method is kept. Test:
+`Inheritance_Calls.thy`.
 
 **Methods that call methods, and revert conditions.** The condition `vcond` of a verification carries, for every method with a pair, its
 postcondition and, if the pair has a revert condition `rv`, also "does not revert if `rv` is false" and "reverts if `rv` is true". What a caller
@@ -119,7 +129,7 @@ A derived contract that inherits from a base with an `assuming` clause has to as
 not supported (strings and bytes are value parameters and work). The facts `vcond` are also available by name: `vcond_constructor` and `vcond_<method>` (the numbers `vcond(i)` depend on the position of the method, hidden methods of super calls included).
 
 The implementation is in `Inheritance.ML`; examples and tests are in `Inheritance_Bank.thy`, `Inheritance_Constructors.thy` and
-`Inheritance_Abstract.thy`, `Inheritance_Callee.thy` (bases that hash or assume a locale), `Inheritance_Invariants.thy` (invariants of derived contracts), `Inheritance_Errors.thy` (what is refused).
+`Inheritance_Abstract.thy`, `Inheritance_Callee.thy` (bases that hash or assume a locale), `Inheritance_Invariants.thy` (invariants of derived contracts), `Inheritance_Calls.thy` (inherited methods that call internal methods), `Inheritance_Errors.thy` (what is refused).
 
 ## Prerequisites
 

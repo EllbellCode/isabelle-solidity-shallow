@@ -466,7 +466,7 @@ val _ = let
         val inherited_defs = the_default [] inherited
         (*inherited methods of bases that did not verify this invariant: an automatic proof is tried*)
         val foreign_defs = filter_out (fn (m, _) => AList.defined (op =) inherited_defs m) (the_default [] all_inherited)
-        val framed = Inh.frame_proofs {lthy = lthy, pi = pi, data = data, invariant = invs, lems = lems} foreign_defs
+        val framed = Inh.frame_proofs {lthy = lthy, pi = pi, data = data, invariant = invs, lems = lems, vcond_thms = vcond_thms} foreign_defs
         val is_inherited = map2 (fn (m, _) => fn f => AList.defined (op =) inherited_defs m orelse is_some f) (#methods data) framed
         val ovr_goals = Inh.override_goals lthy data vcond invs ovr
         val user_goals = Inh.user_goals lem is_inherited lems ovr_goals
@@ -565,6 +565,33 @@ val _ = let
             cons (name, prepost)
           end
         val prepost = fold go (map (fn (n, ps) => (n, map fst ps)) prepost3) [];
+        (*the obligations of an inherited method are those of the base only if the base verified this invariant*)
+        val all_inherited = Option.map snd (Inh.ilookupN thy name_lc);
+        val inherited = Option.map (filter (fn (_, b) => Inh.verified_with thy b invariant)) all_inherited;
+        (*[[verification_frame_calls]]: the inherited internal methods that the inherited methods call get the pair "the invariant is
+          preserved" (precondition: it holds; postcondition: it holds afterwards), unless the user gave a pair*)
+        val adopted =
+          if not (Config.get lthy Inh.frame_calls) then []
+          else
+            let
+              val inh = the_default [] inherited
+              val foreign = filter_out (fn (m, _) => AList.defined (op =) inh m) (the_default [] all_inherited)
+              val foreign = filter (fn (m, _) => not (Option.isSome (Inh.super_src m))) foreign
+            in
+              filter (fn g => (case AList.lookup (op =) prepost g of SOME [] => true | NONE => true | _ => false))
+                (Inh.adopt_methods thy data name_lc invariant inh foreign)
+            end;
+        val prepost =
+          let
+            fun pair g =
+              let
+                val m = lookup_safe (#methods data) g
+                val Ts = map (fst #> snd) (#parlist m @ #memlist m @ #cdlist m)
+                val pre = fold_rev (fn T => fn t => Abs ("p", T, t)) Ts (Abs ("s", stateT, mk_inv_state invariant $ Bound 0))
+                val post = fold_rev (fn T => fn t => Abs ("p", T, t)) Ts
+                  (Abs ("s", stateT, Abs ("r", rvalueT, Abs ("s'", stateT, mk_inv_state invariant $ Bound 0))))
+              in [(pre, post)] end
+          in map (fn (n, ps) => if member (op =) adopted n andalso null ps then (n, pair n) else (n, ps)) prepost end;
         (*revert conditions: at most one per method (the first that has one)*)
         val rvs =
           let
@@ -579,11 +606,9 @@ val _ = let
           in map_filter go3 prepost3 end;
         val ct = mk_contract_typ lthy name_lc;
         val name_ct = mk_contract_typ lthy name_lc;
-        (*the obligations of an inherited method are those of the base only if the base verified this invariant*)
-        val all_inherited = Option.map snd (Inh.ilookupN thy name_lc);
-        val inherited = Option.map (filter (fn (_, b) => Inh.verified_with thy b invariant)) all_inherited;
       in
-        lthy |> mk_vcond sfx data ct prepost rvs invariant
+        lthy |> Local_Theory.background_theory (Inh.record_adopted name_lc invariant adopted)
+             |> mk_vcond sfx data ct prepost rvs invariant
              |> (fn ((vcond, vcond_name, vcond_def), lthy')
                => mk_vcond_lemmas sfx data vcond vcond_def prepost rvs invariant lthy'
              ||> Local_Theory.exit_global

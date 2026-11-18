@@ -1043,6 +1043,20 @@ lemma (in Solidity) wp_post:
   by (cases "execute (c x) s") (auto)
 
 text \<open>
+  A call of a method whose condition in the verification of the invariant \<open>I\<close> is "if \<open>I\<close> holds before, it holds after" (the pair that
+  \<open>verification\<close> assumes for an inherited internal method when \<open>[[verification_frame_calls]]\<close> is set): the call can be stepped over
+  as long as \<open>I\<close> holds before it, and the rest then starts in a state where \<open>I\<close> holds.
+\<close>
+lemma (in Contract) wp_call_inv:
+  assumes "inv_state I s"
+      and "\<And>r. effect m s r \<Longrightarrow> inv_state I s \<Longrightarrow> post s r (\<lambda>_ _ s'. inv_state I s') (K True)"
+      and "\<And>a sa. inv_state I sa \<Longrightarrow> P a sa"
+      and "\<And>e sa. Q e sa"
+    shows "wp m P Q s"
+  using assms unfolding wp_def effect_def post_def inv_state_def
+  by (cases "execute m s") (auto)
+
+text \<open>
   The same for a call that is known not to revert (the exception part of its postcondition is \<open>K False\<close>): then whatever the caller does when the
   call reverts does not matter.
 \<close>

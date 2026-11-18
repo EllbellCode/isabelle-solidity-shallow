@@ -2519,6 +2519,545 @@ lemma overridden_fallback:
 
 end
 
+section \<open>Inheritance: reuse of verifications\<close>
+
+text \<open>
+  A contract is verified once: a derived contract that verifies the same invariant takes the obligations of the inherited methods from the
+  verification of its base (pairs of preconditions, postconditions and revert conditions included), so that only the constructor and the new or
+  overridden methods are goals. A derived contract that verifies an invariant its base never verified gets the obligations of the inherited
+  methods that leave the invariant alone, or update the storage in a way it can follow, proved automatically. Each \<open>show\<close> below is a goal
+  that remains: if \<open>verification\<close> did not discharge the others, the proof would fail with goals left over.
+\<close>
+
+abbreviation "vr_count \<equiv> STR ''count''"
+abbreviation "vr_cap \<equiv> STR ''cap''"
+
+contract VrCounter
+  for vr_count: "SType.TValue TSint"
+
+constructor
+where
+  "vr_count [] ::=\<^sub>s \<langle>sint\<rangle> 0"
+
+cfunction vr_inc external
+where
+  "vr_count [] ::=\<^sub>s vr_count ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 1" ,
+
+cfunction vr_clear external
+where
+  "vr_count [] ::=\<^sub>s \<langle>sint\<rangle> 0"
+
+invariant vr_count_val cv where
+    "\<exists>v. fst cv vr_count = storage_data.Value (Uint v)"
+  for "VrCounter"
+
+verification vr_count_val_v:
+  vr_count_val
+  vr_inc and
+  vr_clear
+  for "VrCounter"
+proof -
+  show "\<And>call. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> effect (constructor call) s r \<Longrightarrow>
+        post s r (K (K (inv_state vr_count_val))) (K True)"
+    unfolding constructor_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: vr_count_valI | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (vr_inc call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> inv_state vr_count_val s \<Longrightarrow>
+        post s r (K (K (inv_state vr_count_val))) (K True)"
+    unfolding vr_inc_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: vr_count_valI | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (vr_clear call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> inv_state vr_count_val s \<Longrightarrow>
+        post s r (K (K (inv_state vr_count_val))) (K True)"
+    unfolding vr_clear_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: vr_count_valI | auto simp: storage_update_def | (drule sym, simp))+
+qed
+
+subsection \<open>Several verifications of one contract\<close>
+
+text \<open>
+  A contract can verify several invariants, one \<open>verification\<close> each. The first keeps the names \<open>vcond\<close>, \<open>vcond_<m>\<close>; a further one adds
+  \<open>_<name of the verification>\<close> to them (here \<open>vcond_vr_count_any_v\<close>). A derived contract that verifies an invariant that one of the
+  verifications of its base verified reuses the proofs of that verification.
+\<close>
+
+invariant vr_count_any ca where
+    "True"
+  for "VrCounter"
+
+verification vr_count_any_v:
+  vr_count_any
+  vr_inc and
+  vr_clear
+  for "VrCounter"
+proof -
+  show "\<And>call. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond_vr_count_any_v x h r) \<Longrightarrow> effect (constructor call) s r \<Longrightarrow>
+        post s r (K (K (inv_state vr_count_any))) (K True)"
+    unfolding constructor_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: vr_count_anyI | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (vr_inc call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond_vr_count_any_v x h r) \<Longrightarrow> inv_state vr_count_any s \<Longrightarrow>
+        post s r (K (K (inv_state vr_count_any))) (K True)"
+    unfolding vr_inc_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: vr_count_anyI | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (vr_clear call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond_vr_count_any_v x h r) \<Longrightarrow> inv_state vr_count_any s \<Longrightarrow>
+        post s r (K (K (inv_state vr_count_any))) (K True)"
+    unfolding vr_clear_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: vr_count_anyI | auto simp: storage_update_def | (drule sym, simp))+
+qed
+
+subsection \<open>An invariant on the state of the derived contract\<close>
+
+text \<open>
+  \<open>VrCapped\<close> adds \<open>vr_cap\<close>, which is at least 10 and only grows. \<open>vr_inc\<close> and \<open>vr_clear\<close> are inherited and do not touch \<open>vr_cap\<close>: they are
+  proved automatically. Only the constructor and \<open>vr_raise\<close> remain.
+\<close>
+
+contract VrCapped is VrCounter
+  for vr_cap: "SType.TValue TSint"
+
+constructor
+where
+  "vr_cap [] ::=\<^sub>s \<langle>sint\<rangle> 10"
+
+cfunction vr_raise external
+where
+  "vr_cap [] ::=\<^sub>s vr_cap ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 1"
+
+invariant vr_cap_big cb where
+    "\<exists>v. 10 \<le> unat v \<and> fst cb vr_cap = storage_data.Value (Uint v)"
+  for "VrCapped"
+
+verification vr_cap_big_v:
+  vr_cap_big
+  for "VrCapped"
+proof -
+  show "\<And>call. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> effect (constructor call) s r \<Longrightarrow>
+        post s r (K (K (inv_state vr_cap_big))) (K True)"
+    unfolding constructor_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: vr_cap_bigI | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (vr_raise call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> inv_state vr_cap_big s \<Longrightarrow>
+        post s r (K (K (inv_state vr_cap_big))) (K True)"
+    unfolding vr_raise_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    apply (vcg wprules: vr_cap_bigI)
+    apply (auto simp: storage_update_def)
+     apply (simp add: unat_word_ariths mod_less)
+    apply (drule sym, simp)
+    done
+qed
+
+text \<open>
+  \<open>VrTwin\<close> verifies \<open>vr_count_any\<close> too: \<open>vr_inc\<close> and \<open>vr_clear\<close> come from the second verification of \<open>VrCounter\<close> (the first one verified another invariant);
+  the constructor and the new method \<open>vr_noop\<close> are left.
+\<close>
+
+contract VrTwin is VrCounter
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction vr_noop external
+where
+  "\<langle>skip\<rangle>"
+
+verification vr_twin_any:
+  vrCounter.vr_count_any
+  for "VrTwin"
+proof -
+  show "\<And>call. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> effect (constructor call) s r \<Longrightarrow>
+        post s r (K (K (inv_state vrCounter.vr_count_any))) (K True)"
+    unfolding constructor_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: vrCounter.vr_count_anyI[OF vrCounter_const] | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (vr_noop call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> inv_state vrCounter.vr_count_any s \<Longrightarrow>
+        post s r (K (K (inv_state vrCounter.vr_count_any))) (K True)"
+    unfolding vr_noop_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    apply (vcg_all wprules: vrCounter.vr_count_anyI[OF vrCounter_const] wperules: vrCounter.vr_count_anyE[OF vrCounter_const])
+    apply (all \<open>(auto simp: storage_update_def)?\<close>)
+    done
+qed
+
+subsection \<open>A stronger invariant: overriding what would break it\<close>
+
+text \<open>
+  \<open>VrFrozen\<close> keeps \<open>vr_count\<close> at 0, a stronger invariant than the base's. \<open>vr_inc\<close> would break it, so \<open>VrFrozen\<close> overrides \<open>vr_inc\<close> (that is a goal);
+  \<open>vr_clear\<close> sets \<open>vr_count\<close> to 0 and is proved automatically.
+\<close>
+
+contract VrFrozen is VrCounter
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction vr_inc external
+where
+  "\<langle>skip\<rangle>"
+
+invariant vr_count_zero cz where
+    "fst cz vr_count = storage_data.Value (Uint 0)"
+  for "VrFrozen"
+
+verification vr_count_zero_v:
+  vr_count_zero
+  for "VrFrozen"
+proof -
+  show "\<And>call. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> effect (constructor call) s r \<Longrightarrow>
+        post s r (K (K (inv_state vr_count_zero))) (K True)"
+    unfolding constructor_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: vr_count_zeroI | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (vr_inc call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> inv_state vr_count_zero s \<Longrightarrow>
+        post s r (K (K (inv_state vr_count_zero))) (K True)"
+    unfolding vr_inc_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by vcg
+qed
+
+subsection \<open>Inherited methods that update mappings\<close>
+
+text \<open>
+  The invariant types all state variables of the contract, so an inherited method that writes into a mapping has to be shown to keep the mapping
+  typed. \<open>verification\<close> proves this itself (a second strategy after the one for methods that leave the state alone): the typing of the mappings is
+  taken apart into functions (\<open>typed_map1\<close>, \<open>typed_map2\<close> in \<open>WP.thy\<close>), the updates are simplified, and the introduction rule of the invariant is
+  applied with the updated functions as witnesses. \<open>VrTagged\<close> inherits \<open>vr_put\<close> (writes one entry of \<open>vr_stock\<close>) and \<open>vr_copy\<close> (reads one entry and writes
+  another); the invariant is about the new variable \<open>vr_tag\<close>. Only the constructor and \<open>vr_retag\<close> remain.
+\<close>
+
+abbreviation "vr_stock \<equiv> STR ''stock''"
+abbreviation "vr_tag \<equiv> STR ''tag''"
+
+contract VrLedger
+  for vr_stock: "SType.TMap (SType.TValue TAddress) (SType.TValue TSint)"
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction vr_put external
+param "STR ''who''" : "SType.TValue TAddress"
+and "STR ''amount''" : "SType.TValue TSint"
+where
+  "assign_storage_monad vr_stock [stackLookup (STR ''who'') []] (stackLookup (STR ''amount'') [])" ,
+
+cfunction vr_copy external
+param "STR ''from''" : "SType.TValue TAddress"
+and "STR ''to''" : "SType.TValue TAddress"
+where
+  "assign_storage_monad vr_stock [stackLookup (STR ''to'') []] (vr_stock ~\<^sub>s [stackLookup (STR ''from'') []])"
+
+contract VrTagged is VrLedger
+  for vr_tag: "SType.TValue TSint"
+
+constructor
+where
+  "vr_tag [] ::=\<^sub>s \<langle>sint\<rangle> 1"
+
+cfunction vr_retag external
+where
+  "vr_tag [] ::=\<^sub>s vr_tag ~\<^sub>s [] \<langle>+\<rangle> \<langle>sint\<rangle> 1"
+
+invariant vr_tag_set ts where
+    "\<exists>v. fst ts vr_tag = storage_data.Value (Uint v)"
+  for "VrTagged"
+
+verification vr_tag_set_v:
+  vr_tag_set
+  for "VrTagged"
+proof -
+  show "\<And>call. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> effect (constructor call) s r \<Longrightarrow>
+        post s r (K (K (inv_state vr_tag_set))) (K True)"
+    unfolding constructor_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: vr_tag_setI | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (vr_retag call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> inv_state vr_tag_set s \<Longrightarrow>
+        post s r (K (K (inv_state vr_tag_set))) (K True)"
+    unfolding vr_retag_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: vr_tag_setI | auto simp: storage_update_def | (drule sym, simp))+
+qed
+
+
+subsection \<open>A base whose pair has a compound revert condition\<close>
+
+text \<open>
+  A derived contract that verifies the invariant of its base takes the obligations of the inherited methods from the base. The hypothesis
+  on the dispatcher is translated along the injection and simplified; with a revert condition such as the one of an ERC20 transfer (an
+  address is zero, or a value is excessive, written with absorbed disjuncts) the simplifier leaves a goal that is literally one conjunct of a
+  premise, and the automatic proof used to fail with "Tactic failed" for the inherited method.
+\<close>
+
+contract VrBs
+  for "STR ''x''": "SType.TValue TSint"
+
+constructor
+where
+  "skip_monad"
+
+cfunction vr_mv external
+param "STR ''t''" : "SType.TValue TAddress"
+and "STR ''v''" : "SType.TValue TSint"
+where
+  "do {
+     cond_monad (equals_monad (stackLookup (STR ''t'') []) (address_monad null)) (assert_monad false_monad) skip_monad;
+     cond_monad (equals_monad (stackLookup (STR ''v'') []) (sint_monad 5)) (assert_monad false_monad) skip_monad
+   }"
+
+contract VrDv is VrBs
+
+constructor
+where
+  "skip_monad"
+
+cfunction vr_other external
+where
+  "skip_monad"
+
+invariant vr_bs_ok e where "True" for "VrBs"
+
+lemma (in vrBs) vr_bs_okI2:
+  assumes "\<exists>v. fst e STR ''x'' = storage_data.Value (Uint v)"
+  shows "vr_bs_ok e"
+  using assms by (blast intro: vr_bs_okI)
+
+declare (in vrBs) vr_bs_okI[wprules del]
+declare (in vrBs) vr_bs_okI2[wprules]
+
+abbreviation (in vrBs) vr_lp2 where "vr_lp2 _ _ st \<equiv> inv_state vr_bs_ok st"
+abbreviation (in Solidity) vr_sp2 where "vr_sp2 (t::'a) (v::256 word) st rr st' \<equiv> True"
+abbreviation (in Solidity) vr_rv2 where
+  "vr_rv2 (t::'a) (v::256 word) st \<equiv> t = null \<or> (t = null \<and> v = 7) \<or> (t \<noteq> null \<and> v = 5)"
+
+verification vr_bs_v:
+  vr_bs_ok
+  vr_mv (vr_lp2, vr_sp2, vr_rv2)
+  for "VrBs"
+  apply (all \<open>unfold constructor_def vr_mv_def\<close>)
+  apply (all \<open>(erule post_exc_const, erule_tac post_wp)\<close>)
+  apply (all \<open>unfold inv_state_def\<close>)
+  apply (all \<open>vcg_all wprules: vr_bs_okI2 wperules: vr_bs_okE\<close>)
+  apply (all \<open>(clarsimp simp: wpsimps dest!: wpdrules)?\<close>)
+  apply (all \<open>(vcg_all wprules: vr_bs_okI2 wperules: vr_bs_okE)?\<close>)
+  apply (all \<open>(clarsimp simp: wpsimps dest!: wpdrules)?\<close>)
+  apply (all \<open>(solves \<open>clarsimp simp: kdequals_def kdnot_def kdless_def vtless_def lift_value_binary.simps vtequals.simps vtnot_def\<close>)?\<close>)
+  apply (all \<open>(solves \<open>clarsimp simp: word_gt_0\<close>)?\<close>)
+  done
+
+abbreviation (in vrDv) vr_lp2 where "vr_lp2 _ _ st \<equiv> inv_state vrBs.vr_bs_ok st"
+
+verification vr_dv_v:
+  vrBs.vr_bs_ok
+  for "VrDv"
+  apply (all \<open>(unfold constructor_def vr_other_def)?\<close>)
+  apply (all \<open>(erule post_exc_const, erule_tac post_wp)?\<close>)
+  apply (all \<open>(unfold inv_state_def)?\<close>)
+  apply (all \<open>(vcg_all wprules: vrBs.vr_bs_okI2[OF vrBs_const] wperules: vrBs.vr_bs_okE[OF vrBs_const])?\<close>)
+  apply (all \<open>(clarsimp simp: wpsimps dest!: wpdrules)?\<close>)
+  done
+
+subsection \<open>Inherited methods that call internal methods\<close>
+
+text \<open>
+  A derived contract can verify an invariant its base never verified. Inherited methods that leave the invariant alone are proved
+  automatically (see \<open>Inheritance_Invariants\<close>). An inherited method that calls an internal method cannot be proved that way: inside
+  \<open>verification\<close> an internal method without a pair is known only as "anything", so the call could break the invariant.
+
+  With \<open>declare [[verification_frame_calls = true]]\<close> the verification of an invariant that the base did not verify assumes, for the internal methods that
+  the inherited methods call (directly or through other internal methods), the pair "if the invariant holds before the call it holds
+  after". Their obligation is the usual one for a method that leaves the invariant alone (proved automatically when it does; it stays a goal
+  when it does not), and the inherited methods that call them are proved by stepping over the calls with that pair. The option is off by
+  default: it changes the conditions of such verifications.
+\<close>
+
+abbreviation "cla \<equiv> STR ''cla''"
+abbreviation "clb \<equiv> STR ''clb''"
+
+contract ClBase
+  for cla: "SType.TValue TSint"
+
+constructor
+where
+  "cla [] ::=\<^sub>s \<langle>sint\<rangle> 0"
+
+cfunction cl_step
+param "STR ''k''" : "SType.TValue TSint"
+where
+  "cla [] ::=\<^sub>s cla ~\<^sub>s [] \<langle>+\<rangle> stackLookup (STR ''k'') []" ,
+
+cfunction cl_two
+where
+  "do {
+    icall (cl_step 5);
+    icall (cl_step 7)
+  }" ,
+
+cfunction cl_run external
+where
+  "do {
+    icall cl_two;
+    cla [] ::=\<^sub>s \<langle>sint\<rangle> 1;
+    icall cl_two
+  }" ,
+
+cfunction cl_idle external
+where
+  "\<langle>skip\<rangle>"
+
+subsubsection \<open>A chain of calls, with a parameter\<close>
+
+text \<open>
+  \<open>ClDer\<close> adds \<open>clb\<close> and the invariant that \<open>clb\<close> holds a number. \<open>cl_run\<close> calls \<open>cl_two\<close> twice, which calls \<open>cl_step\<close> twice (with an argument);
+  all three internal methods are inherited and write only \<open>cla\<close>. With the option set, \<open>cl_step\<close> and \<open>cl_two\<close> get the pair and are proved,
+  and so is \<open>cl_run\<close>: only the constructor and the new method \<open>cl_setb\<close> remain.
+\<close>
+
+contract ClDer is ClBase
+  for clb: "SType.TValue TSint"
+
+constructor
+where
+  "clb [] ::=\<^sub>s \<langle>sint\<rangle> 5"
+
+cfunction cl_setb external
+where
+  "clb [] ::=\<^sub>s \<langle>sint\<rangle> 6"
+
+invariant cl_typed ct where
+    "\<exists>v. fst ct clb = storage_data.Value (Uint v)"
+  for "ClDer"
+
+(*without the option the caller is a goal of the user*)
+ML \<open>
+  val thy = \<^theory>;
+  val _ = expect_failure thy "verification cl_typed_off: cl_typed for \"ClDer\" done" "cl_run";
+\<close>
+
+declare [[verification_frame_calls = true]]
+
+verification cl_typed_v:
+  cl_typed
+  for "ClDer"
+proof -
+  show "\<And>call. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> effect (constructor call) s r \<Longrightarrow>
+        post s r (K (K (inv_state cl_typed))) (K True)"
+    unfolding constructor_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: cl_typedI | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (cl_setb call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> inv_state cl_typed s \<Longrightarrow>
+        post s r (K (K (inv_state cl_typed))) (K True)"
+    unfolding cl_setb_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: cl_typedI | auto simp: storage_update_def | (drule sym, simp))+
+qed
+
+subsubsection \<open>A further derived contract reuses the pairs\<close>
+
+text \<open>
+  \<open>ClDer2\<close> verifies the same invariant: the obligations of all inherited methods, the internal ones included, come from the verification of
+  \<open>ClDer\<close> (whose conditions have the pairs, and so do ours).
+\<close>
+
+contract ClDer2 is ClDer
+
+constructor
+where
+  "\<langle>skip\<rangle>"
+
+cfunction cl_noop external
+where
+  "\<langle>skip\<rangle>"
+
+verification cl_typed_v2:
+  clDer.cl_typed
+  for "ClDer2"
+proof -
+  show "\<And>call. (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> effect (constructor call) s r \<Longrightarrow>
+        post s r (K (K (inv_state clDer.cl_typed))) (K True)"
+    unfolding constructor_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by (vcg wprules: clDer.cl_typedI[OF clDer_const] | auto simp: storage_update_def | (drule sym, simp))+
+
+  show "\<And>call. effect (cl_noop call) s r \<Longrightarrow> (\<And>x h r. effect (call x) h r \<Longrightarrow> vcond x h r) \<Longrightarrow> inv_state clDer.cl_typed s \<Longrightarrow>
+        post s r (K (K (inv_state clDer.cl_typed))) (K True)"
+    unfolding cl_noop_def
+    apply (erule post_exc_true, erule_tac post_wp)
+    unfolding inv_state_def
+    by vcg
+qed
+
+subsubsection \<open>Controls\<close>
+
+text \<open>
+  The pair is only assumed: its obligation is proved for the callee. \<open>ClZero\<close> verifies "\<open>cla\<close> is 0", which \<open>cl_step\<close> breaks. The caller
+  \<open>cl_run\<close> is proved from the pair, but the obligation of \<open>cl_step\<close> stays a goal and cannot be proved: the verification does not finish.
+\<close>
+
+ML \<open>
+  val thy = \<^theory>;
+  val _ = expect_failure thy
+    "contract ClZero is ClBase constructor where \"\<langle>skip\<rangle>\" cfunction cl_zz external where \"\<langle>skip\<rangle>\" \
+    \invariant cl_zero z where \"fst z cla = storage_data.Value (Uint 0)\" for \"ClZero\" \
+    \verification cl_zero_v: cl_zero for \"ClZero\" by (simp add: inv_state_def)"
+    "cl_step";
+  val _ = expect_failure thy
+    "contract ClZero2 is ClBase constructor where \"\<langle>skip\<rangle>\" cfunction cl_zz2 external where \"\<langle>skip\<rangle>\" \
+    \invariant cl_zero2 z where \"fst z cla = storage_data.Value (Uint 0)\" for \"ClZero2\" \
+    \verification cl_zero2_v: cl_zero2 for \"ClZero2\" by (simp add: inv_state_def)"
+    "Failed to apply initial proof method";
+\<close>
+
+declare [[verification_frame_calls = false]]
+
+subsection \<open>Controls: what is not reused is not proved\<close>
+
+text \<open>
+  The reuse above must not make \<open>verification\<close> accept what is not true. \<open>VrCounter\<close> inherits \<open>vr_inc\<close>, which breaks the invariant
+  \<open>vr_count = 0\<close>: the obligation of \<open>vr_inc\<close> stays a goal, so a proof that only treats the constructor fails (\<open>VrFrozen\<close> above, which
+  overrides \<open>vr_inc\<close>, is the version that works).
+\<close>
+
+ML \<open>
+  val thy = \<^theory>;
+  val _ = expect_failure thy
+    "contract VrNoOver is VrCounter constructor where \"\<langle>skip\<rangle>\" cfunction vr_no external where \"\<langle>skip\<rangle>\" \
+    \invariant vr_zero2 z where \"fst z vr_count = storage_data.Value (Uint 0)\" for \"VrNoOver\" \
+    \verification vr_zero2_v: vr_zero2 for \"VrNoOver\" by (simp add: inv_state_def)"
+    "Failed to apply initial proof method";
+\<close>
+
 ML \<open>
   (*a base that was never declared*)
   val _ = expect_failure \<^theory>
